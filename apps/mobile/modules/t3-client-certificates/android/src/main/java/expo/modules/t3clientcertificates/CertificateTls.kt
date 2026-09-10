@@ -1,5 +1,6 @@
 package expo.modules.t3clientcertificates
 
+import java.io.IOException
 import java.net.InetAddress
 import java.net.Socket
 import java.security.Principal
@@ -7,6 +8,7 @@ import java.security.PrivateKey
 import java.security.cert.X509Certificate
 import javax.net.ssl.*
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
 
 /** HTTPS and WSS share an identity; paths, credentials and fragments never enter the key. */
 internal fun certificateOrigin(url: String): String? {
@@ -46,19 +48,33 @@ internal class CertificateGenerations {
   fun invalidateAll() { tokens.clear() }
 }
 
+// OkHttp permits HTTP/2 connection coalescing across hosts only with its own verifier instance.
+// Delegating the same checks preserves HTTP/2 within an origin without sharing its client identity.
+internal val originHostnameVerifier: HostnameVerifier = OkHttpClient().hostnameVerifier.let { verifier ->
+  HostnameVerifier { host, session -> verifier.verify(host, session) }
+}
+
 /** Select using OkHttp's original hostname, never reverse DNS or the resolved IP address. */
 internal class OriginSocketFactory(
   private val fallback: SSLSocketFactory,
   private val factory: (String) -> SSLSocketFactory,
   private val opened: (String, Socket) -> Unit,
   private val lock: Any = Any(),
+  private val generation: (String) -> Any? = { null },
 ) : SSLSocketFactory() {
   override fun getDefaultCipherSuites(): Array<String> = fallback.defaultCipherSuites
   override fun getSupportedCipherSuites(): Array<String> = fallback.supportedCipherSuites
-  override fun createSocket(socket: Socket, host: String, port: Int, autoClose: Boolean): Socket = synchronized(lock) {
+  override fun createSocket(socket: Socket, host: String, port: Int, autoClose: Boolean): Socket {
     val authority = if (host.contains(':')) "[$host]" else host
     val origin = requireNotNull(certificateOrigin("https://$authority:$port"))
-    factory(origin).createSocket(socket, host, port, autoClose).also { opened(origin, it) }
+    val expectedGeneration = synchronized(lock) { generation(origin) }
+    // KeyChain may wait on another process. Neither other hosts nor certificate removal should
+    // wait for that work; reject its result if the identity changed while it was being resolved.
+    val selected = factory(origin)
+    return synchronized(lock) {
+      if (generation(origin) !== expectedGeneration) throw IOException("Certificate selection changed. Try again.")
+      selected.createSocket(socket, host, port, autoClose).also { opened(origin, it) }
+    }
   }
   // OkHttp uses the layered overload. Refuse ambiguous forms instead of guessing a destination.
   override fun createSocket(host: String, port: Int): Socket = throw UnsupportedOperationException("Layered TLS required")

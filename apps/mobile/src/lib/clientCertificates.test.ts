@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from "vite-plus/test";
 const mocks = vi.hoisted(() => ({
   getAlias: vi.fn(),
   transfer: vi.fn(),
+  createTransfer: vi.fn(() => "transfer-id"),
   cancel: vi.fn(),
   removeListener: vi.fn(),
   listener: undefined as
@@ -14,6 +15,7 @@ vi.mock("expo", () => ({
   requireOptionalNativeModule: () => ({
     getAlias: mocks.getAlias,
     transfer: mocks.transfer,
+    createTransfer: mocks.createTransfer,
     cancel: mocks.cancel,
     addListener: (_: string, listener: typeof mocks.listener) => {
       mocks.listener = listener;
@@ -21,7 +23,6 @@ vi.mock("expo", () => ({
     },
   }),
 }));
-vi.mock("./uuid", () => ({ uuidv4: () => "transfer-id" }));
 import { transferWithClientCertificate } from "./clientCertificates";
 
 const input = { url: "https://server.example/upload", fileUri: "file:///app/file", upload: true };
@@ -91,4 +92,29 @@ it("reports only this transfer's progress", async () => {
   });
   expect(progress).toHaveBeenCalledExactlyOnceWith(0.5);
   expect(mocks.removeListener).toHaveBeenCalledOnce();
+});
+
+it("releases native registration when aborted before the queued transfer starts", async () => {
+  const controller = new AbortController();
+  mocks.createTransfer.mockImplementationOnce(() => {
+    controller.abort();
+    return "transfer-id";
+  });
+  await expect(
+    transferWithClientCertificate({ ...input, signal: controller.signal }),
+  ).rejects.toThrow();
+  expect(mocks.transfer).not.toHaveBeenCalled();
+  expect(mocks.cancel).toHaveBeenCalledWith("transfer-id");
+});
+
+it("works with React Native signals without throwIfAborted", async () => {
+  const controller = new AbortController();
+  Object.defineProperty(controller.signal, "throwIfAborted", { value: undefined });
+  expect(await transferWithClientCertificate({ ...input, signal: controller.signal })).toEqual({
+    status: 204,
+  });
+  controller.abort();
+  await expect(
+    transferWithClientCertificate({ ...input, signal: controller.signal }),
+  ).rejects.toThrow("cancelled");
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { Alert, Pressable, View } from "react-native";
 
 import { AppText as Text } from "../../components/AppText";
@@ -12,24 +12,26 @@ import {
 } from "../../lib/clientCertificates";
 import { buildPairingUrl } from "./pairing";
 
+function subscribe(listener: () => void) {
+  const subscription = onClientCertificateChange(listener);
+  return () => subscription.remove();
+}
+
 export function ClientCertificateField(props: { host: string; disabled?: boolean }) {
   const endpoint = buildPairingUrl(props.host, "certificate-origin");
-  const [alias, setAlias] = useState<string | null>(null);
+  const alias = useSyncExternalStore(
+    subscribe,
+    () => selectedClientCertificate(endpoint),
+    () => null,
+  );
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  useEffect(() => {
-    const refresh = () => setAlias(selectedClientCertificate(endpoint));
-    refresh();
-    const subscription = onClientCertificateChange(refresh);
-    return () => subscription.remove();
-  }, [endpoint]);
   if (!clientCertificatesAvailable) return null;
   const act = async (remove: boolean) => {
     setBusy(true);
     try {
       if (remove) await removeClientCertificate(endpoint);
       else await chooseClientCertificate(endpoint);
-      setAlias(selectedClientCertificate(endpoint));
     } catch (error) {
       Alert.alert(
         "Client certificate",

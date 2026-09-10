@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./clientCertificates", () => ({
   selectedClientCertificate: mocks.selected,
   transferWithClientCertificate: mocks.transfer,
-  onClientCertificateChange: () => ({ remove() {} }),
 }));
 vi.mock("./uuid", () => ({ uuidv4: () => "unique-id" }));
 vi.mock("expo-file-system", () => ({
@@ -39,7 +38,9 @@ it("keeps public and local media on their original loader", async () => {
 });
 
 it("leases the protected download until its native consumer releases it", async () => {
-  const media = await loadCertificateMedia("https://host/video.mp4", new AbortController().signal);
+  const signal = new AbortController().signal;
+  Object.defineProperty(signal, "throwIfAborted", { value: undefined });
+  const media = await loadCertificateMedia("https://host/video.mp4", signal);
   expect(media.uri).toBe("file:///cache/t3-mtls-media-unique-id");
   expect(mocks.remove).not.toHaveBeenCalled();
   media.dispose();

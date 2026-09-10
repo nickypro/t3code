@@ -14,6 +14,8 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import java.util.UUID
 import okhttp3.*
 import okio.buffer
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -23,13 +25,15 @@ class T3ClientCertificatesModule : Module() {
   private val io = Executors.newCachedThreadPool()
   private lateinit var transport: T3CertificateTransport
   private val calls get() = transport.calls
-  private val cancelled = ConcurrentHashMap.newKeySet<String>()
+  private data class Transfer(val url: String, val origin: String, val generation: Any)
+  private val transfers = ConcurrentHashMap<String, Transfer>()
   private val sockets get() = transport.sockets
   private val lock get() = transport.lock
   private lateinit var context: Context
   private val preferences get() = transport.preferences
   private val fileClient get() = transport.fileClient
   @Volatile private var choosing = false
+  private var destroyed = false
   private val keyChainChanges = object : BroadcastReceiver() {
     override fun onReceive(context: Context?, intent: Intent?) {
       synchronized(lock) {
@@ -72,13 +76,14 @@ class T3ClientCertificatesModule : Module() {
           try {
             val uri = Uri.parse(origin)
             KeyChain.choosePrivateKeyAlias(activity, { alias ->
-              io.execute {
+              execute(promise) {
                 try {
                   if (alias != null) {
                     requireNotNull(KeyChain.getPrivateKey(context, alias)) { "Private key unavailable" }
                     val chain = requireNotNull(KeyChain.getCertificateChain(context, alias)) { "Certificate unavailable" }
                     chain.forEach { it.checkValidity() }
                     synchronized(lock) {
+                      check(!destroyed) { "Certificate operation cancelled because the app closed." }
                       check(preferences.edit().putString(origin, alias).commit()) { "Could not save certificate choice" }
                       retire(origin)
                     }
@@ -105,26 +110,35 @@ class T3ClientCertificatesModule : Module() {
       }
       sendEvent("changed", mapOf("origin" to origin))
     }
-    Function("cancel") { id: String ->
-      cancelled.add(id)
-      calls[id]?.cancel()
+    // Register synchronously so cancellation cannot overtake the async transfer callback.
+    Function("createTransfer") { url: String ->
+      val origin = requireNotNull(certificateOrigin(url)) { "HTTPS URL required" }
+      synchronized(lock) {
+        check(preferences.contains(origin)) { "No client certificate selected for this host" }
+        UUID.randomUUID().toString().also { id ->
+          transfers[id] = Transfer(url, origin, transport.generation(origin))
+        }
+      }
     }
-    AsyncFunction("transfer") { id: String, url: String, fileUri: String, upload: Boolean, contentType: String, promise: Promise ->
-      val requestedOrigin = certificateOrigin(url)
-      val generation = requestedOrigin?.let { synchronized(lock) { transport.generation(it) } }
-      io.execute {
+    Function("cancel") { id: String ->
+      synchronized(lock) {
+        transfers.remove(id)
+        calls[id]?.cancel()
+      }
+    }
+    AsyncFunction("transfer") { id: String, fileUri: String, upload: Boolean, contentType: String, promise: Promise ->
+      execute(promise) {
         var file: File? = null
         try {
-          val origin = requireNotNull(certificateOrigin(url)) { "HTTPS URL required" }
-          check(preferences.contains(origin)) { "No client certificate selected for this host" }
+          val transfer = transfers[id] ?: throw IOException("Transfer cancelled")
+          val origin = transfer.origin
           val uri = Uri.parse(fileUri)
           require(uri.scheme == "file") { "An app-owned file is required" }
           val target = File(requireNotNull(uri.path)).canonicalFile
           val roots = listOf(context.filesDir.canonicalFile, context.cacheDir.canonicalFile)
           require(roots.any { target.path.startsWith(it.path + File.separator) }) { "File must be inside app storage" }
           file = target
-          if (cancelled.contains(id)) throw IOException("Transfer cancelled")
-          val request = Request.Builder().url(url)
+          val request = Request.Builder().url(transfer.url)
           if (upload) {
             val body = target.asRequestBody(contentType.toMediaTypeOrNull())
             request.post(object : RequestBody() {
@@ -153,10 +167,10 @@ class T3ClientCertificatesModule : Module() {
           }
           val call = synchronized(lock) {
             check(preferences.contains(origin)) { "Certificate selection changed. Try again." }
-            check(transport.generation(origin) === generation) { "Certificate selection changed. Try again." }
+            check(transfers[id] === transfer) { "Transfer cancelled" }
+            check(transport.generation(origin) === transfer.generation) { "Certificate selection changed. Try again." }
             fileClient.newCall(request.build()).also { calls[id] = it }
           }
-          if (cancelled.contains(id)) call.cancel()
           call.execute().use { response ->
             if (!upload) {
               if (!response.isSuccessful) throw IOException("Download returned HTTP ${response.code}")
@@ -171,18 +185,29 @@ class T3ClientCertificatesModule : Module() {
           promise.reject("CERTIFICATE_TRANSFER", error.message, error)
         } finally {
           calls.remove(id)
-          cancelled.remove(id)
+          transfers.remove(id)
         }
       }
     }
     OnDestroy {
       context.unregisterReceiver(keyChainChanges)
       synchronized(lock) {
+        destroyed = true
         transport.invalidateAll()
+        transfers.clear()
         calls.values.forEach { it.cancel() }
         sockets.keys.forEach { runCatching { it.close() } }
       }
       io.shutdown()
+    }
+  }
+
+  private fun execute(promise: Promise, block: () -> Unit) {
+    try {
+      io.execute(block)
+    } catch (error: RejectedExecutionException) {
+      choosing = false
+      promise.reject("CERTIFICATE_CANCELLED", "Certificate operation cancelled because the app closed.", error)
     }
   }
 

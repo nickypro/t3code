@@ -3,6 +3,8 @@ package expo.modules.t3clientcertificates
 import java.net.InetAddress
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import okhttp3.*
@@ -41,7 +43,7 @@ class CertificateTlsTest {
       .sslSocketFactory(OriginSocketFactory(clientTrust.sslSocketFactory(), { origin ->
         if (origin in origins) tls.socketFactory else clientTrust.sslSocketFactory()
       }, opened), clientTrust.trustManager)
-      .protocols(listOf(Protocol.HTTP_1_1))
+      .hostnameVerifier(originHostnameVerifier)
       .apply {
         if (tlsVersion != null) connectionSpecs(listOf(ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS).tlsVersions(tlsVersion).build()))
       }
@@ -244,8 +246,8 @@ class CertificateTlsTest {
     }
   }
 
-  @Test fun differentOriginsKeepTheirOwnIdentityWhenConnectionsAreReused() {
-    val server = server()
+  @Test fun http2ReusesConnectionsWithinAnOriginWithoutSharingIdentitiesAcrossHosts() {
+    val server = server().apply { protocols = listOf(Protocol.HTTP_2, Protocol.HTTP_1_1) }
     val secondPhone = HeldCertificate.Builder().commonName("second phone").signedBy(ca).build()
     val firstUrl = server.url("/")
     val secondUrl = firstUrl.newBuilder().host("t3.test").build()
@@ -261,7 +263,7 @@ class CertificateTlsTest {
     }, { _, _ -> })
     val client = OkHttpClient.Builder()
       .sslSocketFactory(socketFactory, clientTrust.trustManager)
-      .protocols(listOf(Protocol.HTTP_1_1))
+      .hostnameVerifier(originHostnameVerifier)
       .dns(object : Dns {
         override fun lookup(hostname: String): List<InetAddress> =
           if (hostname == "t3.test") listOf(InetAddress.getByName("127.0.0.1")) else Dns.SYSTEM.lookup(hostname)
@@ -272,7 +274,11 @@ class CertificateTlsTest {
       for ((index, destination) in listOf(firstUrl to phone, secondUrl to secondPhone, firstUrl to phone).withIndex()) {
         val (url, identity) = destination
         server.enqueue(MockResponse().setBody("authenticated"))
-        client.newCall(Request.Builder().url(url).build()).execute().use { assertEquals(200, it.code) }
+        client.newCall(Request.Builder().url(url).build()).execute().use {
+          assertEquals(200, it.code)
+          assertEquals(Protocol.HTTP_2, it.protocol)
+          assertEquals("authenticated", it.body!!.string())
+        }
         val received = server.takeRequest(2, TimeUnit.SECONDS)!!
         assertEquals(identity.certificate, received.handshake!!.peerCertificates.first())
         assertEquals(if (index == 2) 1 else 0, received.sequenceNumber)
@@ -319,6 +325,59 @@ class CertificateTlsTest {
     generations.invalidateAll()
     for (origin in origins) {
       assertNotSame(pending.getValue(origin), generations.generation(origin))
+    }
+  }
+
+
+  @Test fun slowIdentityResolutionDoesNotBlockOtherHostsOrReviveARemovedChoice() {
+    val lock = Any()
+    val generations = CertificateGenerations()
+    val resolving = CountDownLatch(1)
+    val release = CountDownLatch(1)
+    val executor = Executors.newSingleThreadExecutor()
+    val server = server(false)
+    val blockedOrigin = certificateOrigin(server.url("/").toString())!!
+    val factory = OriginSocketFactory(clientTrust.sslSocketFactory(), { origin ->
+      if (origin == blockedOrigin) {
+        resolving.countDown()
+        check(release.await(5, TimeUnit.SECONDS)) { "Identity resolution was not released" }
+      }
+      clientTrust.sslSocketFactory()
+    }, { origin, _ -> assertNotEquals("A removed identity must never register a socket", blockedOrigin, origin) }, lock, generations::generation)
+    val client = OkHttpClient.Builder()
+      .sslSocketFactory(factory, clientTrust.trustManager)
+      .hostnameVerifier(originHostnameVerifier)
+      .dns(object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> = listOf(InetAddress.getByName("127.0.0.1"))
+      })
+      .retryOnConnectionFailure(false)
+      .callTimeout(5, TimeUnit.SECONDS)
+      .build()
+    try {
+      val pending = executor.submit<Unit> {
+        client.newCall(Request.Builder().url(server.url("/")).build()).execute().close()
+      }
+      assertTrue(resolving.await(5, TimeUnit.SECONDS))
+      server.enqueue(MockResponse().setBody("other host"))
+      val otherHost = server.url("/").newBuilder().host("t3.test").build()
+      client.newCall(Request.Builder().url(otherHost).build()).execute().use {
+        assertEquals("other host", it.body!!.string())
+      }
+      synchronized(lock) { generations.invalidate(blockedOrigin) }
+      release.countDown()
+      try {
+        pending.get(5, TimeUnit.SECONDS)
+        fail("The request must reject the removed identity")
+      } catch (error: ExecutionException) {
+        assertTrue(error.cause is java.io.IOException)
+        assertEquals("Certificate selection changed. Try again.", error.cause!!.message)
+      }
+      assertEquals(1, server.requestCount)
+    } finally {
+      release.countDown()
+      executor.shutdownNow()
+      client.connectionPool.evictAll()
+      server.shutdown()
     }
   }
 

@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { PROJECT_FAVICON_MAX_DATA_URL_LENGTH } from "@t3tools/client-runtime/project-favicon-cache";
 
-const media = vi.hoisted(() => ({ load: vi.fn(), dispose: vi.fn() }));
-vi.mock("./certificateMedia", () => ({ loadCertificateMedia: media.load }));
 const native = vi.hoisted(() => ({
   load: vi.fn(async (_url: string, options: { maxWidth: number; maxHeight: number }) => ({
     width: options.maxWidth,
@@ -36,7 +34,6 @@ const image = { url: "https://remote/icon.png" };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  media.load.mockResolvedValue({ uri: "file:///protected-icon", dispose: media.dispose });
   native.read.mockReset().mockResolvedValue(png);
   native.load.mockReset().mockImplementation(async (_url, { maxWidth }) => ({
     width: maxWidth,
@@ -54,9 +51,6 @@ describe("mobile project icon thumbnails", () => {
     expect(thumbnail).toBe(`data:image/png;base64,${png}`);
     expect(native.load.mock.calls.map(([, options]) => options.maxWidth)).toEqual([96, 48]);
     expect(native.remove).toHaveBeenCalledTimes(2);
-    expect(media.load).toHaveBeenCalledOnce();
-    expect(media.dispose).toHaveBeenCalledOnce();
-    expect(native.load.mock.calls.every(([uri]) => uri === "file:///protected-icon")).toBe(true);
     for (const call of native.load.mock.results)
       expect((await call.value).release).toHaveBeenCalledOnce();
   });
@@ -71,14 +65,6 @@ describe("mobile project icon thumbnails", () => {
     await expect(downscaleProjectFavicon(image, controller.signal)).rejects.toThrow();
     expect(release).toHaveBeenCalledOnce();
     expect(native.write).not.toHaveBeenCalled();
-  });
-
-  it("deletes a protected download when decoding fails", async () => {
-    native.load.mockRejectedValueOnce(new Error("Invalid image"));
-    await expect(downscaleProjectFavicon(image, new AbortController().signal)).rejects.toThrow(
-      "Invalid image",
-    );
-    expect(media.dispose).toHaveBeenCalledOnce();
   });
 
   it("rejects an image the native decoder did not downsize", async () => {

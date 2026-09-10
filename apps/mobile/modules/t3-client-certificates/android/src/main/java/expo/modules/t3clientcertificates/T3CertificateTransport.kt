@@ -53,7 +53,7 @@ class T3CertificateTransport private constructor(private val context: Context) {
     }, { origin, socket ->
       sockets.entries.removeIf { it.key.isClosed }
       sockets[socket] = origin
-    }, lock)
+    }, lock, ::generation)
     OkHttpClientProvider.setOkHttpClientFactory(OkHttpClientFactory {
       // Networking and Fresco must not open separate caches over the same directory.
       configure(OkHttpClientProvider.createClientBuilder()).build()
@@ -68,7 +68,7 @@ class T3CertificateTransport private constructor(private val context: Context) {
 
   private fun configure(builder: OkHttpClient.Builder): OkHttpClient.Builder = builder
     .sslSocketFactory(socketFactory, trust)
-    .protocols(listOf(Protocol.HTTP_1_1))
+    .hostnameVerifier(originHostnameVerifier)
 
   companion object {
     @Volatile private var instance: T3CertificateTransport? = null

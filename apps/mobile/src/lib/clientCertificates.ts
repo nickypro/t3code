@@ -1,16 +1,14 @@
 import { requireOptionalNativeModule } from "expo";
 import { Platform } from "react-native";
 
-import { uuidv4 } from "./uuid";
-
 type Subscription = { remove(): void };
 interface CertificateModule {
   getAlias(url: string): string | null;
   choose(url: string): Promise<string | null>;
   remove(url: string): Promise<void>;
+  createTransfer(url: string): string;
   transfer(
     id: string,
-    url: string,
     fileUri: string,
     upload: boolean,
     contentType: string,
@@ -56,28 +54,30 @@ export async function transferWithClientCertificate(input: {
   onProgress?: (progress: number) => void;
 }): Promise<{ status: number } | null> {
   if (!native || !selectedClientCertificate(input.url)) return null;
-  input.signal.throwIfAborted();
-  const id = uuidv4();
+  if (input.signal.aborted) throw new Error("Transfer cancelled.");
+  const id = native.createTransfer(input.url);
   const cancel = () => native.cancel(id);
-  const subscription = input.onProgress
-    ? native.addListener("transferProgress", (event) => {
-        if (event.id === id && event.totalBytes > 0)
-          input.onProgress?.(event.bytesSent / event.totalBytes);
-      })
-    : null;
-  input.signal.addEventListener("abort", cancel, { once: true });
+  let subscription: Subscription | null = null;
   try {
+    subscription = input.onProgress
+      ? native.addListener("transferProgress", (event) => {
+          if (event.id === id && event.totalBytes > 0)
+            input.onProgress?.(event.bytesSent / event.totalBytes);
+        })
+      : null;
+    input.signal.addEventListener("abort", cancel, { once: true });
+    if (input.signal.aborted) throw new Error("Transfer cancelled.");
     const result = await native.transfer(
       id,
-      input.url,
       input.fileUri,
       input.upload ?? false,
       input.contentType ?? "application/octet-stream",
     );
-    input.signal.throwIfAborted();
+    if (input.signal.aborted) throw new Error("Transfer cancelled.");
     return result;
   } finally {
     input.signal.removeEventListener("abort", cancel);
+    native.cancel(id);
     subscription?.remove();
   }
 }
