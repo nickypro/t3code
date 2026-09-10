@@ -1,3 +1,4 @@
+import { loadCertificateMedia } from "../lib/certificateMedia";
 import { useIsFocused } from "@react-navigation/native";
 import { useEvent } from "expo";
 import { useVideoPlayer, VideoView } from "expo-video";
@@ -27,12 +28,24 @@ function LoadedMediaVideo(props: {
     player.bufferOptions = { preferredForwardBufferDuration: 5 };
   });
   const { status } = useEvent(player, "statusChange", { status: player.status });
+  const mediaLease = useRef<(() => void) | null>(null);
   const loadSource = useEffectEvent(async (signal: AbortSignal) => {
     const uri = props.resolvePlaybackUri ? await props.resolvePlaybackUri() : props.uri;
     if (signal.aborted) return;
     if (uri === null) throw new Error("Video unavailable");
     player.pause();
-    await player.replaceAsync({ uri, contentType: "progressive" });
+    const media = await loadCertificateMedia(uri, signal);
+    if (signal.aborted) {
+      media.dispose();
+      return;
+    }
+    const previousLease = mediaLease.current;
+    mediaLease.current = media.dispose;
+    try {
+      await player.replaceAsync({ uri: media.uri, contentType: "progressive" });
+    } finally {
+      previousLease?.();
+    }
     if (!signal.aborted && props.playRequested && active.current) player.play();
   });
 
@@ -58,7 +71,11 @@ function LoadedMediaVideo(props: {
         if (!controller.signal.aborted) setLoadState("error");
       },
     );
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      mediaLease.current?.();
+      mediaLease.current = null;
+    };
   }, [player, props.playRequested, attempt]);
 
   return (

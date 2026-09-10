@@ -1,3 +1,4 @@
+import { useCertificateMedia } from "../../lib/certificateMedia";
 import { QuestionAnswerHistory } from "./QuestionAnswerHistory";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -1209,12 +1210,13 @@ function ToolActivityImage(props: {
   readonly color: ColorValue;
   readonly themeAppearance: "light" | "dark";
 }) {
+  const media = useCertificateMedia(props.source);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
   return (
     <View className="h-4 w-4 items-center justify-center overflow-hidden rounded-[3px] bg-background">
       {!loaded || failed ? <WorkLogIcon icon={props.fallback} color={props.color} /> : null}
-      {!failed ? (
+      {!failed && media.uri !== null ? (
         <View
           style={[
             StyleSheet.absoluteFill,
@@ -1222,7 +1224,7 @@ function ToolActivityImage(props: {
           ]}
         >
           <Image
-            source={props.source}
+            source={media.uri}
             cachePolicy="memory-disk"
             contentFit="contain"
             style={[StyleSheet.absoluteFill, { opacity: loaded ? 0.7 : 0 }]}

@@ -116,6 +116,23 @@ For a plain HTTP LAN endpoint, use the direct pairing URL in a browser that can
 open it, or pair from the desktop app. On mobile, an IP address entered without a
 scheme uses HTTP, so include `https://` when your server uses HTTPS.
 
+### Android client certificates
+
+In an Android build with client-certificate support, install your client identity
+under Android's **VPN & app user certificate** credentials. On **Add Environment**,
+enter the HTTPS host, open **Advanced settings**, choose **Select certificate**,
+then enter your pairing code.
+The same choice applies to requests, the session connection, attachments and previews.
+You can change or remove the choice by expanding the environment in Connections.
+
+A certificate choice belongs to an exact HTTPS host and port; environments sharing
+that address share the choice. Changing the address does not copy the certificate.
+Changing or removing the choice disconnects its existing TLS connections. Removing
+the last environment using an address also forgets its certificate choice.
+The app retains only the Android alias; the private key stays in Android's credential
+store. Certificate selection does not replace pairing or server certificate checks.
+
+
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Connections → Add environment**, choose

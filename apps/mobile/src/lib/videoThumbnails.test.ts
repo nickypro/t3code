@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const mocks = vi.hoisted(() => ({ createPlayer: vi.fn() }));
+const mocks = vi.hoisted(() => ({ createPlayer: vi.fn(), loadMedia: vi.fn() }));
+vi.mock("./certificateMedia", () => ({ loadCertificateMedia: mocks.loadMedia }));
 vi.mock("expo-video", () => ({ createVideoPlayer: mocks.createPlayer }));
 
 let thumbnails: typeof import("./videoThumbnails");
@@ -15,6 +16,7 @@ const source = () => ({ uri: "file:///clip.mp4", dispose: vi.fn() });
 beforeEach(async () => {
   vi.resetModules();
   mocks.createPlayer.mockReset().mockImplementation(player);
+  mocks.loadMedia.mockReset().mockImplementation(async (uri: string) => ({ uri, dispose() {} }));
   thumbnails = await import("./videoThumbnails");
 });
 
@@ -143,6 +145,53 @@ describe("video thumbnails", () => {
         new AbortController().signal,
       ),
     ).toBe(frame);
+  });
+
+  it("times out a protected download and disposes its late cache file", async () => {
+    vi.useFakeTimers();
+    const started = Promise.withResolvers<AbortSignal>();
+    const downloaded = Promise.withResolvers<{ uri: string; dispose(): void }>();
+    mocks.loadMedia.mockImplementationOnce((_uri: string, signal: AbortSignal) => {
+      started.resolve(signal);
+      return downloaded.promise;
+    });
+    const request = thumbnails.loadVideoThumbnail(
+      "protected",
+      async () => source(),
+      new AbortController().signal,
+    );
+    const downloadSignal = await started.promise;
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await request).toBeNull();
+    expect(downloadSignal.aborted).toBe(true);
+    expect(
+      await thumbnails.loadVideoThumbnail(
+        "next",
+        async () => source(),
+        new AbortController().signal,
+      ),
+    ).toBe(frame);
+    const late = source();
+    downloaded.resolve(late);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(late.dispose).toHaveBeenCalledOnce();
+    expect(mocks.createPlayer).toHaveBeenCalledOnce();
+  });
+
+  it("releases a protected cache file when native player creation fails", async () => {
+    const media = source();
+    mocks.loadMedia.mockResolvedValueOnce(media);
+    mocks.createPlayer.mockImplementationOnce(() => {
+      throw new Error("No player");
+    });
+    expect(
+      await thumbnails.loadVideoThumbnail(
+        "broken",
+        async () => source(),
+        new AbortController().signal,
+      ),
+    ).toBeNull();
+    expect(media.dispose).toHaveBeenCalledOnce();
   });
 
   it("bounds the retained native images without invalidating frames still displayed", async () => {

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
+  certificateTransfer: vi.fn(),
   directories: new Set<string>(),
   deleted: vi.fn(),
   download: vi.fn(),
@@ -9,6 +10,10 @@ const mocks = vi.hoisted(() => ({
   shareFromSource: vi.fn(),
   available: vi.fn(),
   uuid: vi.fn(),
+}));
+
+vi.mock("./clientCertificates", () => ({
+  transferWithClientCertificate: mocks.certificateTransfer,
 }));
 
 vi.mock("expo-file-system", () => {
@@ -84,6 +89,7 @@ const input = {
 };
 
 beforeEach(() => {
+  mocks.certificateTransfer.mockReset().mockResolvedValue(null);
   mocks.directories.clear();
   mocks.deleted.mockReset();
   mocks.download.mockReset();
@@ -396,5 +402,26 @@ describe("attachment preview files", () => {
     await task;
     expect(mocks.share).not.toHaveBeenCalled();
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("certificate-protected attachment downloads", () => {
+  it("uses native TLS transfer and shares the downloaded file", async () => {
+    mocks.certificateTransfer.mockResolvedValue({ status: 200 });
+    const result = await downloadAttachmentForPreview({
+      ...input,
+      signal: new AbortController().signal,
+    });
+    expect(result?.uri).toContain("report.pdf");
+    expect(mocks.download).not.toHaveBeenCalled();
+    result?.dispose();
+  });
+  it("does not retry a certificate failure anonymously", async () => {
+    mocks.certificateTransfer.mockRejectedValue(new Error("Certificate unavailable"));
+    await expect(
+      downloadAttachmentForPreview({ ...input, signal: new AbortController().signal }),
+    ).rejects.toThrow("Could not download");
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalled();
   });
 });

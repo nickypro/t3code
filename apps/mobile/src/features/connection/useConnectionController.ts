@@ -1,3 +1,5 @@
+import { removeClientCertificate, selectedClientCertificate } from "../../lib/clientCertificates";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { useAtomValue } from "@effect/atom-react";
 import {
   RelayConnectionRegistration,
@@ -86,8 +88,28 @@ export function useConnectionController() {
     [registerEnvironment],
   );
   const removeEnvironment = useCallback(
-    (environmentId: EnvironmentId) => removeEnvironmentMutation(environmentId),
-    [removeEnvironmentMutation],
+    async (environmentId: EnvironmentId) => {
+      const environment = connectedEnvironments.find(
+        (entry) => entry.environmentId === environmentId,
+      );
+      const result = await removeEnvironmentMutation(environmentId);
+      if (
+        AsyncResult.isSuccess(result) &&
+        environment &&
+        selectedClientCertificate(environment.displayUrl)
+      ) {
+        const origin = new URL(environment.displayUrl).origin;
+        const shared = connectedEnvironments.some(
+          (entry) =>
+            entry.environmentId !== environmentId &&
+            entry.displayUrl &&
+            new URL(entry.displayUrl).origin === origin,
+        );
+        if (!shared) await removeClientCertificate(environment.displayUrl);
+      }
+      return result;
+    },
+    [removeEnvironmentMutation, connectedEnvironments],
   );
   const retryEnvironment = useCallback(
     (environmentId: EnvironmentId) => retryEnvironmentMutation(environmentId),

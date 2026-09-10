@@ -1,3 +1,4 @@
+import "./src/lib/clientCertificates";
 import { registerRootComponent } from "expo";
 import "react-native-gesture-handler";
 import { LogBox } from "react-native";

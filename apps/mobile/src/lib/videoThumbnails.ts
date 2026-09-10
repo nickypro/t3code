@@ -1,3 +1,4 @@
+import { loadCertificateMedia } from "./certificateMedia";
 import type { VideoThumbnail } from "expo-video";
 
 import type { AttachmentPreviewFile } from "./attachmentDownload";
@@ -11,24 +12,32 @@ export function cachedVideoThumbnail(key: string): VideoThumbnail | null {
 }
 
 async function extractFrame(uri: string, signal: AbortSignal) {
-  const { createVideoPlayer } = await import("expo-video");
-  if (signal.aborted) return null;
-  const player = createVideoPlayer(null);
-  let disposed = false;
-  let cancel = () => {};
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
+  let player: ReturnType<typeof import("expo-video").createVideoPlayer> | undefined;
+  let media: Awaited<ReturnType<typeof loadCertificateMedia>> | undefined;
+  const cancel = () => controller.abort();
+  const canceled = new Promise<null>((resolve) => {
+    controller.signal.addEventListener("abort", () => resolve(null), { once: true });
+  });
+  signal.addEventListener("abort", cancel, { once: true });
+  // Include the certificate download: it must not block thumbnails for other environments.
+  const timeout = setTimeout(cancel, 15_000);
+  if (signal.aborted) cancel();
   try {
-    // Never play or change audio settings: thumbnails must leave the shared audio session alone.
-    player.bufferOptions = { preferredForwardBufferDuration: 1 };
-    const canceled = new Promise<null>((resolve) => {
-      cancel = () => resolve(null);
-    });
-    signal.addEventListener("abort", cancel, { once: true });
-    // An unreachable environment must not hold up thumbnails for other environments.
-    timeout = setTimeout(cancel, 15_000);
     const frame = (async () => {
-      await player.replaceAsync({ uri, contentType: "progressive" });
-      if (disposed || signal.aborted) return null;
+      const { createVideoPlayer } = await import("expo-video");
+      if (controller.signal.aborted) return null;
+      const loaded = await loadCertificateMedia(uri, controller.signal);
+      if (controller.signal.aborted) {
+        loaded.dispose();
+        return null;
+      }
+      media = loaded;
+      player = createVideoPlayer(null);
+      // Never play or change audio settings: leave the shared audio session alone.
+      player.bufferOptions = { preferredForwardBufferDuration: 1 };
+      await player.replaceAsync({ uri: media.uri, contentType: "progressive" });
+      if (controller.signal.aborted) return null;
       const [thumbnail] = await player.generateThumbnailsAsync([0], {
         maxWidth: 480,
         maxHeight: 480,
@@ -37,10 +46,14 @@ async function extractFrame(uri: string, signal: AbortSignal) {
     })();
     return await Promise.race([frame, canceled]);
   } finally {
-    disposed = true;
+    cancel();
     clearTimeout(timeout);
     signal.removeEventListener("abort", cancel);
-    player.release();
+    try {
+      player?.release();
+    } finally {
+      media?.dispose();
+    }
   }
 }
 

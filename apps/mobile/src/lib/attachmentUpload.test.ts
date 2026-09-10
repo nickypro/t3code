@@ -3,6 +3,7 @@ import * as Option from "effect/Option";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
+  certificateTransfer: vi.fn(),
   documentUri: "file:///documents",
   createAssetUrl: vi.fn(),
   createUploadUrl: Symbol("create-upload-url"),
@@ -57,6 +58,10 @@ vi.mock("../state/session", () => ({
 vi.mock("./uuid", () => ({
   uuidv4: () => "uuid",
   randomHex: () => "0000",
+}));
+
+vi.mock("./clientCertificates", () => ({
+  transferWithClientCertificate: mocks.certificateTransfer,
 }));
 
 vi.mock("expo-file-system", () => ({
@@ -184,6 +189,7 @@ function removeCallsFor(attachmentId: string): number {
 
 describe("prepareTurnAttachments", () => {
   beforeEach(() => {
+    mocks.certificateTransfer.mockReset().mockResolvedValue(null);
     mocks.documentUri = "file:///documents";
     mocks.createAssetUrl.mockReset();
     mocks.createAssetUrl.mockImplementation((target: unknown) => target);
@@ -210,6 +216,23 @@ describe("prepareTurnAttachments", () => {
         : { _tag: "Success", value: undefined },
     );
     mocks.upload.mockResolvedValue({ status: 204, body: "", headers: {} });
+  });
+
+  it("uploads protected files through the certificate transport", async () => {
+    mocks.certificateTransfer.mockResolvedValue({ status: 204 });
+    await prepareTurnAttachments({ environmentId, attachments: [file] });
+    expect(mocks.certificateTransfer).toHaveBeenCalledWith(
+      expect.objectContaining({ upload: true, contentType: file.mimeType }),
+    );
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
+  it("does not upload anonymously after a certificate failure", async () => {
+    mocks.certificateTransfer.mockRejectedValue(new Error("Certificate unavailable"));
+    await expect(prepareTurnAttachments({ environmentId, attachments: [file] })).rejects.toThrow(
+      "Certificate unavailable",
+    );
+    expect(mocks.upload).not.toHaveBeenCalled();
   });
 
   it("keeps existing image attachments on the legacy wire path", async () => {

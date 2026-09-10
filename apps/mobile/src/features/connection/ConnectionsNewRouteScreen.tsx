@@ -1,3 +1,4 @@
+import { ClientCertificateField } from "./ClientCertificateField";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
@@ -290,6 +291,8 @@ export function ConnectionsNewRouteScreen({
                   className="rounded-[14px] border border-input-border bg-input px-4 py-3.5 text-base text-foreground"
                 />
               </View>
+
+              <ClientCertificateField host={hostInput} disabled={isSubmitting} />
 
               {pairingConnectionError ? <ErrorBanner message={pairingConnectionError} /> : null}
 

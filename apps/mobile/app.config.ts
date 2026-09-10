@@ -257,6 +257,7 @@ const config: ExpoConfig = {
     favicon: variant.assets.appIcon,
   },
   plugins: [
+    "./plugins/withAndroidClientCertificates.cjs",
     "expo-asset",
     [
       "expo-font",

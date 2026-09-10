@@ -1,3 +1,4 @@
+import { ClientCertificateField } from "./ClientCertificateField";
 import { SymbolView } from "../../components/AppSymbol";
 import { connectionStatusText } from "@t3tools/client-runtime/connection";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
@@ -176,6 +177,7 @@ export function ConnectionEnvironmentRow(props: {
                   className="rounded-[14px] border border-input-border bg-input px-4 py-3 text-base text-foreground"
                 />
               </View>
+              <ClientCertificateField host={url} />
             </>
           )}
 
