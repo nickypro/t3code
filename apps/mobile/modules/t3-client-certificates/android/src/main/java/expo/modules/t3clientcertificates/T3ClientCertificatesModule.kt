@@ -1,0 +1,324 @@
+package expo.modules.t3clientcertificates
+
+import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.net.Uri
+import android.os.Build
+import android.security.KeyChain
+import androidx.core.content.ContextCompat
+import expo.modules.kotlin.Promise
+import expo.modules.kotlin.modules.Module
+import expo.modules.kotlin.modules.ModuleDefinition
+import java.io.File
+import java.io.IOException
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.Response
+import okio.Buffer
+import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
+
+class T3ClientCertificatesModule : Module() {
+  private data class Transfer(val url: String, val origin: String, val generation: Any)
+
+  private val io = Executors.newCachedThreadPool()
+  private lateinit var context: Context
+  private lateinit var transport: T3CertificateTransport
+  private val lock get() = transport.lock
+  private val preferences get() = transport.preferences
+  private val calls get() = transport.calls
+  private val sockets get() = transport.sockets
+  private val fileClient get() = transport.fileClient
+  private val transfers = ConcurrentHashMap<String, Transfer>()
+
+  @Volatile private var choosing = false
+  private var destroyed = false
+
+  private val keyChainChanges =
+    object : BroadcastReceiver() {
+      override fun onReceive(context: Context?, intent: Intent?) {
+        synchronized(lock) {
+          transport.invalidateAll()
+          sockets.keys.forEach { runCatching { it.close() } }
+          sockets.clear()
+          calls.values.forEach { it.cancel() }
+          fileClient.connectionPool.evictAll()
+        }
+        sendEvent("changed", mapOf("origin" to ""))
+      }
+    }
+
+  override fun definition() = ModuleDefinition {
+    Name("T3ClientCertificates")
+    Events("transferProgress", "changed")
+    OnCreate { create() }
+    Function("getAlias") { url: String ->
+      certificateOrigin(url)?.let { preferences.getString(it, null) }
+    }
+    AsyncFunction("choose") { url: String, promise: Promise -> choose(url, promise) }
+    AsyncFunction("remove") { url: String -> remove(url) }
+    // Register synchronously so cancellation cannot overtake the async transfer callback.
+    Function("createTransfer") { url: String -> createTransfer(url) }
+    Function("cancel") { id: String -> cancel(id) }
+    AsyncFunction("transfer") {
+        id: String,
+        fileUri: String,
+        upload: Boolean,
+        contentType: String,
+        promise: Promise
+      ->
+      execute(promise) { transfer(id, fileUri, upload, contentType, promise) }
+    }
+    OnDestroy { destroy() }
+  }
+
+  private fun create() {
+    context = requireNotNull(appContext.reactContext).applicationContext
+    transport = T3CertificateTransport.install(context)
+    context.cacheDir
+      .listFiles()
+      ?.filter { it.name.startsWith("t3-mtls-media-") }
+      ?.forEach { it.delete() }
+    val changes =
+      IntentFilter().apply {
+        addAction(KeyChain.ACTION_KEYCHAIN_CHANGED)
+        addAction(KeyChain.ACTION_KEY_ACCESS_CHANGED)
+        addAction(KeyChain.ACTION_TRUST_STORE_CHANGED)
+        if (Build.VERSION.SDK_INT < 26) addAction(KeyChain.ACTION_STORAGE_CHANGED)
+      }
+    ContextCompat.registerReceiver(
+      context,
+      keyChainChanges,
+      changes,
+      ContextCompat.RECEIVER_EXPORTED
+    )
+  }
+
+  private fun destroy() {
+    context.unregisterReceiver(keyChainChanges)
+    synchronized(lock) {
+      destroyed = true
+      transport.invalidateAll()
+      transfers.clear()
+      calls.values.forEach { it.cancel() }
+      sockets.keys.forEach { runCatching { it.close() } }
+    }
+    io.shutdown()
+  }
+
+  private fun choose(url: String, promise: Promise) {
+    val origin = certificateOrigin(url)
+    val activity = appContext.currentActivity
+    if (origin == null || activity == null) {
+      promise.reject(
+        "CERTIFICATE_PICKER",
+        "Enter an HTTPS host and open this screen in the foreground.",
+        null
+      )
+    } else if (choosing) {
+      promise.reject("CERTIFICATE_PICKER", "A certificate picker is already open.", null)
+    } else {
+      choosing = true
+      activity.runOnUiThread { showPicker(activity, origin, promise) }
+    }
+  }
+
+  @Suppress("TooGenericExceptionCaught") // Every failure must settle the JS promise.
+  private fun showPicker(activity: Activity, origin: String, promise: Promise) {
+    try {
+      val uri = Uri.parse(origin)
+      KeyChain.choosePrivateKeyAlias(
+        activity,
+        { alias -> execute(promise) { saveChoice(origin, alias, promise) } },
+        null,
+        null,
+        uri.host,
+        if (uri.port == -1) 443 else uri.port,
+        preferences.getString(origin, null)
+      )
+    } catch (error: Exception) {
+      choosing = false
+      promise.reject("CERTIFICATE_PICKER", error.message, error)
+    }
+  }
+
+  @Suppress("TooGenericExceptionCaught") // Every failure must settle the JS promise.
+  private fun saveChoice(origin: String, alias: String?, promise: Promise) {
+    try {
+      if (alias != null) {
+        requireNotNull(KeyChain.getPrivateKey(context, alias)) { "Private key unavailable" }
+        val chain =
+          requireNotNull(KeyChain.getCertificateChain(context, alias)) {
+            "Certificate unavailable"
+          }
+        chain.forEach { it.checkValidity() }
+        synchronized(lock) {
+          check(!destroyed) { "Certificate operation cancelled because the app closed." }
+          check(preferences.edit().putString(origin, alias).commit()) {
+            "Could not save certificate choice"
+          }
+          retire(origin)
+        }
+        sendEvent("changed", mapOf("origin" to origin))
+      }
+      promise.resolve(alias)
+    } catch (error: Exception) {
+      promise.reject("CERTIFICATE_UNAVAILABLE", error.message, error)
+    } finally {
+      choosing = false
+    }
+  }
+
+  private fun remove(url: String) {
+    val origin = requireNotNull(certificateOrigin(url)) { "HTTPS host required" }
+    synchronized(lock) {
+      check(preferences.edit().remove(origin).commit()) { "Could not remove certificate choice" }
+      retire(origin)
+    }
+    sendEvent("changed", mapOf("origin" to origin))
+  }
+
+  private fun createTransfer(url: String): String {
+    val origin = requireNotNull(certificateOrigin(url)) { "HTTPS URL required" }
+    return synchronized(lock) {
+      check(preferences.contains(origin)) { "No client certificate selected for this host" }
+      UUID.randomUUID().toString().also { id ->
+        transfers[id] = Transfer(url, origin, transport.generation(origin))
+      }
+    }
+  }
+
+  private fun cancel(id: String) {
+    synchronized(lock) {
+      transfers.remove(id)
+      calls[id]?.cancel()
+    }
+  }
+
+  @Suppress("TooGenericExceptionCaught") // Every failure must settle the JS promise.
+  private fun transfer(
+    id: String,
+    fileUri: String,
+    upload: Boolean,
+    contentType: String,
+    promise: Promise
+  ) {
+    var file: File? = null
+    try {
+      val transfer = transfers[id] ?: throw IOException("Transfer cancelled")
+      val target = appOwnedFile(fileUri)
+      file = target
+      val request = Request.Builder().url(transfer.url)
+      if (upload) request.post(progressBody(id, target, contentType))
+      val call =
+        synchronized(lock) {
+          check(preferences.contains(transfer.origin)) {
+            "Certificate selection changed. Try again."
+          }
+          check(transfers[id] === transfer) { "Transfer cancelled" }
+          check(transport.generation(transfer.origin) === transfer.generation) {
+            "Certificate selection changed. Try again."
+          }
+          fileClient.newCall(request.build()).also { calls[id] = it }
+        }
+      call.execute().use { response ->
+        if (!upload) saveDownload(response, target)
+        if (call.isCanceled()) throw IOException("Transfer cancelled")
+        promise.resolve(mapOf("status" to response.code))
+      }
+    } catch (error: Exception) {
+      if (!upload) file?.delete()
+      promise.reject("CERTIFICATE_TRANSFER", error.message, error)
+    } finally {
+      calls.remove(id)
+      transfers.remove(id)
+    }
+  }
+
+  private fun saveDownload(response: Response, target: File) {
+    if (!response.isSuccessful) throw IOException("Download returned HTTP ${response.code}")
+    val body = response.body ?: throw IOException("Empty download response")
+    target.outputStream().use { output -> body.byteStream().use { it.copyTo(output) } }
+  }
+
+  private fun appOwnedFile(fileUri: String): File {
+    val uri = Uri.parse(fileUri)
+    require(uri.scheme == "file") { "An app-owned file is required" }
+    val target = File(requireNotNull(uri.path)).canonicalFile
+    val roots = listOf(context.filesDir.canonicalFile, context.cacheDir.canonicalFile)
+    require(roots.any { target.path.startsWith(it.path + File.separator) }) {
+      "File must be inside app storage"
+    }
+    return target
+  }
+
+  private fun progressBody(id: String, file: File, contentType: String): RequestBody {
+    val body = file.asRequestBody(contentType.toMediaTypeOrNull())
+    return object : RequestBody() {
+      override fun contentType() = body.contentType()
+
+      override fun contentLength() = body.contentLength()
+
+      override fun writeTo(sink: BufferedSink) {
+        val total = contentLength()
+        var sent = 0L
+        var last = 0L
+        val forwarding =
+          object : ForwardingSink(sink) {
+            override fun write(source: Buffer, byteCount: Long) {
+              super.write(source, byteCount)
+              sent += byteCount
+              val now = System.nanoTime()
+              if (sent == total || now - last > 100_000_000L) {
+                last = now
+                sendEvent(
+                  "transferProgress",
+                  mapOf("id" to id, "bytesSent" to sent, "totalBytes" to total)
+                )
+              }
+            }
+          }
+        val buffered = forwarding.buffer()
+        body.writeTo(buffered)
+        buffered.flush()
+      }
+    }
+  }
+
+  private fun execute(promise: Promise, block: () -> Unit) {
+    try {
+      io.execute(block)
+    } catch (error: RejectedExecutionException) {
+      choosing = false
+      promise.reject(
+        "CERTIFICATE_CANCELLED",
+        "Certificate operation cancelled because the app closed.",
+        error
+      )
+    }
+  }
+
+  private fun retire(origin: String) {
+    transport.invalidate(origin)
+    calls.values
+      .filter { certificateOrigin(it.request().url.toString()) == origin }
+      .forEach { it.cancel() }
+    sockets.entries
+      .filter { it.value == origin }
+      .forEach {
+        runCatching { it.key.close() }
+        sockets.remove(it.key)
+      }
+    fileClient.connectionPool.evictAll()
+  }
+}

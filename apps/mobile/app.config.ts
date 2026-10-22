@@ -305,6 +305,7 @@ const config: ExpoConfig = {
     favicon: variant.assets.appIcon,
   },
   plugins: [
+    "./plugins/withAndroidClientCertificates.cjs",
     "expo-asset",
     "react-native-pdf-jsi",
     [
