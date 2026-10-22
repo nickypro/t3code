@@ -1,4 +1,5 @@
 import * as Dialog from "../../components/ui/Dialog";
+import { ClientCertificateField } from "./ClientCertificateField";
 import { ConnectionTraceId } from "./ConnectionTraceId";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { hasSavedBearerRoute, hostFreezeNotice } from "@t3tools/client-runtime/connection";
@@ -232,6 +233,7 @@ export function ConnectionEnvironmentRow(props: {
                 value={url}
                 onChangeText={setUrl}
               />
+              <ClientCertificateField host={url} />
             </>
           )}
 

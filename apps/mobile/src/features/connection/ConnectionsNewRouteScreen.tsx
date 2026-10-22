@@ -23,6 +23,7 @@ import { useAppearancePreferences } from "../settings/appearance/AppearancePrefe
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { AppText as Text, AppTextInput, type AppTextInputProps } from "../../components/ui/AppText";
 import { FrostedCutout } from "../../components/ui/FrostedCutout";
+import { ClientCertificateField } from "./ClientCertificateField";
 import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
 import {
   setPendingConnectionError,
@@ -262,6 +263,7 @@ export function ConnectionsNewRouteScreen({
               {pairingConnectionError ??
                 "For machines on your local network or tailnet. The machine keeps its own provider credentials."}
             </Text>
+            <ClientCertificateField host={hostInput} disabled={isSubmitting} />
           </View>
 
           {hasCloudPublicConfig() ? <T3ConnectSection /> : null}

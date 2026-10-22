@@ -1,3 +1,4 @@
+import { transferWithClientCertificate } from "./clientCertificates";
 import { resolveAssetUrl } from "@t3tools/client-runtime/state/assets";
 import {
   clampFileAttachmentUploadBytes,
@@ -258,19 +259,29 @@ async function uploadFileBytes(
         encoding: "base64",
       });
     }
-    const result = await file.upload(url, {
-      httpMethod: "POST",
-      uploadType: UploadType.BINARY_CONTENT,
-      headers: { "Content-Type": composerAttachmentWireMimeType(attachment) },
-      signal,
-      ...(onProgress
-        ? {
-            onProgress: ({ bytesSent, totalBytes }) => {
-              if (totalBytes > 0) onProgress(bytesSent / totalBytes);
-            },
-          }
-        : {}),
-    });
+    const contentType = composerAttachmentWireMimeType(attachment);
+    const result =
+      (await transferWithClientCertificate({
+        url,
+        fileUri: file.uri,
+        upload: true,
+        contentType,
+        signal,
+        onProgress,
+      })) ??
+      (await file.upload(url, {
+        httpMethod: "POST",
+        uploadType: UploadType.BINARY_CONTENT,
+        headers: { "Content-Type": contentType },
+        signal,
+        ...(onProgress
+          ? {
+              onProgress: ({ bytesSent, totalBytes }) => {
+                if (totalBytes > 0) onProgress(bytesSent / totalBytes);
+              },
+            }
+          : {}),
+      }));
     if (result.status < 200 || result.status >= 300) {
       throw new Error(`Upload failed for '${attachment.name}' (${result.status}).`);
     }
