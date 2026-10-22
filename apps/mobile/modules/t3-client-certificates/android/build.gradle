@@ -1,0 +1,17 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'com.t3tools.clientcertificates'
+version = '0.0.1'
+android {
+  namespace 'expo.modules.t3clientcertificates'
+  defaultConfig { versionCode 1; versionName '0.0.1' }
+}
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+  testImplementation 'com.squareup.okhttp3:okhttp-tls:4.12.0'
+}

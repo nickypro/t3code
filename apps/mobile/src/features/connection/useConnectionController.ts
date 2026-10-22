@@ -9,6 +9,7 @@ import type {
   RelayEnvironmentStatusResponse,
 } from "@t3tools/contracts/relay";
 import * as Option from "effect/Option";
+import { AsyncResult } from "effect/reactivity";
 import { useMemo } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
@@ -16,6 +17,7 @@ import {
   connectPairingUrl as connectPairingUrlAtom,
   updateBearerConnection,
 } from "../../connection/onboarding";
+import { removeClientCertificate, selectedClientCertificate } from "../../lib/clientCertificates";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { relayEnvironmentDiscovery } from "../../state/relay";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -82,8 +84,27 @@ export function useConnectionController() {
         }),
       }),
     );
-  const removeEnvironment = (environmentId: EnvironmentId) =>
-    removeEnvironmentMutation(environmentId);
+  const removeEnvironment = async (environmentId: EnvironmentId) => {
+    const environment = connectedEnvironments.find(
+      (entry) => entry.environmentId === environmentId,
+    );
+    const result = await removeEnvironmentMutation(environmentId);
+    if (
+      AsyncResult.isSuccess(result) &&
+      environment &&
+      selectedClientCertificate(environment.displayUrl)
+    ) {
+      const origin = new URL(environment.displayUrl).origin;
+      const shared = connectedEnvironments.some(
+        (entry) =>
+          entry.environmentId !== environmentId &&
+          entry.displayUrl &&
+          new URL(entry.displayUrl).origin === origin,
+      );
+      if (!shared) await removeClientCertificate(environment.displayUrl);
+    }
+    return result;
+  };
   const retryEnvironment = (environmentId: EnvironmentId) =>
     retryEnvironmentMutation(environmentId);
   const setEnvironmentEnabled = (environmentId: EnvironmentId, enabled: boolean) =>

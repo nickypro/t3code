@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
+  certificateTransfer: vi.fn(),
   directories: new Set<string>(),
   deleted: vi.fn(),
   download: vi.fn(),
@@ -10,6 +11,10 @@ const mocks = vi.hoisted(() => ({
   available: vi.fn(),
   open: vi.fn(),
   uuid: vi.fn(),
+}));
+
+vi.mock("./clientCertificates", () => ({
+  transferWithClientCertificate: mocks.certificateTransfer,
 }));
 
 vi.mock("expo-file-system", () => {
@@ -74,6 +79,7 @@ vi.mock("./shareFileFromSource", () => ({ shareFileFromSource: mocks.shareFromSo
 import {
   downloadAndShareAttachment,
   downloadAttachmentForPreview,
+  openAttachmentInViewer,
   shareLocalAttachment,
 } from "./attachmentDownload";
 import { isForegroundHandoffActive } from "./foreground-handoff";
@@ -88,6 +94,7 @@ const input = {
 beforeEach(() => {
   mocks.open.mockReset();
   mocks.open.mockResolvedValue(undefined);
+  mocks.certificateTransfer.mockReset().mockResolvedValue(null);
   mocks.directories.clear();
   mocks.deleted.mockReset();
   mocks.download.mockReset();
@@ -342,5 +349,55 @@ describe("attachment preview files", () => {
     await task;
     expect(mocks.share).not.toHaveBeenCalled();
     expect(mocks.deleted).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("certificate-protected attachment downloads", () => {
+  it("uses native TLS transfer and shares the downloaded file", async () => {
+    mocks.certificateTransfer.mockResolvedValue({ status: 200 });
+    const result = await downloadAttachmentForPreview({
+      ...input,
+      signal: new AbortController().signal,
+    });
+    expect(result?.uri).toContain("report.pdf");
+    expect(mocks.download).not.toHaveBeenCalled();
+    result?.dispose();
+  });
+  it("does not retry a certificate failure anonymously", async () => {
+    mocks.certificateTransfer.mockRejectedValue(new Error("Certificate unavailable"));
+    await expect(
+      downloadAttachmentForPreview({ ...input, signal: new AbortController().signal }),
+    ).rejects.toThrow("Could not download");
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalled();
+  });
+  it("opens a protected remote file in the viewer through native TLS transfer", async () => {
+    mocks.certificateTransfer.mockResolvedValue({ status: 200 });
+    await openAttachmentInViewer({
+      uri: input.url,
+      attachment: input.attachment,
+      signal: new AbortController().signal,
+    });
+    expect(mocks.certificateTransfer).toHaveBeenCalledWith(
+      expect.objectContaining({ url: input.url }),
+    );
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.open).toHaveBeenCalledWith(
+      expect.stringContaining("report.pdf"),
+      "application/pdf",
+    );
+  });
+  it("does not open a viewer anonymously after a certificate failure", async () => {
+    mocks.certificateTransfer.mockRejectedValue(new Error("Certificate unavailable"));
+    await expect(
+      openAttachmentInViewer({
+        uri: input.url,
+        attachment: input.attachment,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Certificate unavailable");
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.open).not.toHaveBeenCalled();
+    expect(mocks.deleted).toHaveBeenCalled();
   });
 });
