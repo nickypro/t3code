@@ -209,6 +209,28 @@ Sharing & access** on the host, or on a headless host with `t3 auth session list
 `t3 auth session revoke <id>`. A desktop that can still sign in over SSH pairs
 again on its next connect.
 
+### SSH from the Android app
+
+The Android app connects over SSH with its own key. In **Settings → SSH**, create
+the key and add its public line to `~/.ssh/authorized_keys` on each host, then
+describe your hosts in the SSH config there as you would in `~/.ssh/config`.
+`Host`, `HostName`, `User`, `Port`, `ProxyJump` and `HostKeyAlias` are used.
+
+Choose the host under **Add environment → Or connect over SSH**. The first
+connection to each host, jump hosts included, shows its key fingerprint: check it
+against `ssh-keygen -lf` on the host before trusting it. A host whose key changes
+is refused until you remove its old key in **Settings → SSH**.
+
+A jump host only has to pass the connection through, so its `authorized_keys`
+line can be limited to that:
+
+```text
+restrict,port-forwarding,permitopen="127.0.0.1:2222",command="/bin/false" ssh-ed25519 AAAA… t3code-android
+```
+
+Removing the environment closes the app's connection and leaves the server
+running.
+
 For Antigravity's Google callback on a remote host, see
 [remote sign-in](./providers-antigravity.md#sign-in-from-a-remote-device).
 
