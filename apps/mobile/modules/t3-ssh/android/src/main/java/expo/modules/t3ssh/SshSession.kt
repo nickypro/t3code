@@ -94,7 +94,7 @@ class SshSession private constructor(private val clients: List<SSHClient>) : Clo
 
   /** Forwards a new loopback port on this device to `127.0.0.1:remotePort` on the target. */
   fun forward(remotePort: Int): Int {
-    val server = ServerSocket(0, BACKLOG, InetAddress.getLoopbackAddress())
+    val server = ServerSocket(0, BACKLOG, LOOPBACK_ADDRESS)
     listeners += server
     if (!isOpen) {
       closeQuietly(server)
@@ -143,6 +143,10 @@ class SshSession private constructor(private val clients: List<SSHClient>) : Clo
 
   companion object {
     private const val LOOPBACK = "127.0.0.1"
+
+    // Not getLoopbackAddress(): on Android that is ::1, which the http://127.0.0.1 URLs the app
+    // builds for a forward would never reach.
+    private val LOOPBACK_ADDRESS = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
     private const val BACKLOG = 50
 
     fun connect(

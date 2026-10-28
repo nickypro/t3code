@@ -11,6 +11,12 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+/**
+ * IPv4 loopback, spelled out: with IPv6 preferred (as on Android) getLoopbackAddress() is ::1,
+ * and the servers and the app's URLs use 127.0.0.1.
+ */
+val LOCALHOST: InetAddress = InetAddress.getByAddress(byteArrayOf(127, 0, 0, 1))
+
 /** A throwaway OpenSSH server on loopback, configured and owned by one test. */
 class TestSshd(
   private val dir: File,
@@ -85,7 +91,7 @@ class TestSshd(
  * bytes, which is what a dropped mobile network looks like to both ends.
  */
 class TcpRelay(private val targetPort: Int) : Closeable {
-  private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+  private val server = ServerSocket(0, 50, LOCALHOST)
   private val sockets = CopyOnWriteArrayList<Socket>()
 
   @Volatile private var flowing = true
@@ -100,7 +106,7 @@ class TcpRelay(private val targetPort: Int) : Closeable {
         } catch (_: IOException) {
           break
         }
-        val upstream = Socket(InetAddress.getLoopbackAddress(), targetPort)
+        val upstream = Socket(LOCALHOST, targetPort)
         sockets += client
         sockets += upstream
         pump(client, upstream)
@@ -136,7 +142,7 @@ class TcpRelay(private val targetPort: Int) : Closeable {
 
 /** Answers every HTTP request on loopback with one fixed body, then closes the connection. */
 class TestHttpService(body: String) : Closeable {
-  private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
+  private val server = ServerSocket(0, 50, LOCALHOST)
   private val response = body.toByteArray().let { bytes ->
     "HTTP/1.1 200 OK\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray() +
       bytes
@@ -168,7 +174,7 @@ class TestHttpService(body: String) : Closeable {
   override fun close() = server.close()
 }
 
-fun freeLoopbackPort(): Int = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use {
+fun freeLoopbackPort(): Int = ServerSocket(0, 1, LOCALHOST).use {
   it.localPort
 }
 
@@ -186,7 +192,7 @@ fun awaitListening(port: Int, ceilingMs: Long = 10_000, stillStarting: () -> Uni
   while (true) {
     stillStarting()
     try {
-      Socket().use { it.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 200) }
+      Socket().use { it.connect(InetSocketAddress(LOCALHOST, port), 200) }
       return
     } catch (_: IOException) {
       check(System.nanoTime() < deadline) { "Nothing listened on $port within ${ceilingMs}ms." }

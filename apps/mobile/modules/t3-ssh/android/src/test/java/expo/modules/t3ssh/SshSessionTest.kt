@@ -240,7 +240,7 @@ class SshSessionTest {
   }
 
   private fun refusesConnections(port: Int): Boolean = try {
-    Socket(InetAddress.getLoopbackAddress(), port).use { false }
+    Socket(LOCALHOST, port).use { false }
   } catch (_: IOException) {
     true
   }

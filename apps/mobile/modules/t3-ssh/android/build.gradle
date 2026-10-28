@@ -36,6 +36,9 @@ tasks.withType(Test).configureEach {
   javaLauncher = javaToolchains.launcherFor {
     languageVersion = JavaLanguageVersion.of(21)
   }
+  // On Android InetAddress.getLoopbackAddress() is ::1. Preferring IPv6 makes the JVM agree,
+  // so the tests see the loopback the app gets.
+  systemProperty 'java.net.preferIPv6Addresses', 'true'
   // The end-to-end test runs only when given the scripts and archive to use.
   ['T3_SSH_E2E_SCRIPTS', 'T3_SSH_E2E_HOME'].each { name ->
     def value = System.getenv(name)
