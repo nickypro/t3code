@@ -74,3 +74,15 @@ export function sshErrorCode(cause: unknown): string | null {
     ? cause.code
     : null;
 }
+
+/** What a person can act on, for the errors the native module names. */
+export function sshFailureMessage(cause: unknown): string {
+  switch (sshErrorCode(cause)) {
+    case "ERR_SSH_AUTH":
+      return "The host did not accept this device's SSH key. Add the key from Settings > SSH to its authorized_keys.";
+    case "ERR_SSH_NO_KEY":
+      return "Create an SSH key in Settings > SSH first.";
+    default:
+      return cause instanceof Error ? cause.message : String(cause);
+  }
+}

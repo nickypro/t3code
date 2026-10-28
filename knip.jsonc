@@ -104,6 +104,8 @@
         "fingerprint.config.js",
         "plugins/*.cjs",
         "scripts/generate-device-stream.mts",
+        // Run by hand to feed the native SSH module's end-to-end test.
+        "modules/t3-ssh/e2e/write-remote-scripts.ts",
         "src/features/devices/device-stream.browser.ts!",
         "src/features/browser/preview-stream.browser.ts!",
       ],

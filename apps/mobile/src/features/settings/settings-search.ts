@@ -14,6 +14,7 @@ const SETTINGS_SEARCH_TERMS = {
     "tailscale",
   ],
   SettingsNotifications: ["push", "alerts", "live activity", "agent activity"],
+  SettingsSsh: ["ssh key", "ssh config", "known hosts", "proxyjump", "authorized_keys"],
   SettingsAppearance: [
     "theme",
     "dark mode",

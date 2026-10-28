@@ -29,7 +29,7 @@ import {
 import * as Effect from "effect/Effect";
 import { HttpClient } from "effect/http";
 
-import { type SshNative, sshErrorCode } from "./native";
+import { type SshNative, sshErrorCode, sshFailureMessage } from "./native";
 import { parseSshConfig, resolveSshHost } from "./sshConfig";
 
 /**
@@ -274,14 +274,13 @@ function nativeError(cause: unknown) {
     case "ERR_SSH_AUTH":
       return new ConnectionBlockedError({
         reason: "authentication",
-        detail:
-          "The host did not accept this device's SSH key. Add the key from Settings > SSH to its authorized_keys.",
+        detail: sshFailureMessage(cause),
         hop: "tunnel",
       });
     case "ERR_SSH_NO_KEY":
       return new ConnectionBlockedError({
         reason: "configuration",
-        detail: "Create an SSH key in Settings > SSH first.",
+        detail: sshFailureMessage(cause),
         hop: "device",
       });
     case "ERR_SSH_UNREACHABLE":
