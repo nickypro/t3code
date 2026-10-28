@@ -15,7 +15,7 @@ import kotlin.concurrent.thread
 class TestSshd(
   private val dir: File,
   authorizedKeys: String,
-  extraConfig: String = "",
+  extraConfig: String = ""
 ) : Closeable {
   val port: Int = freeLoopbackPort()
   val hostKeyPublicFile = File(dir, "host_ed25519.pub")
@@ -58,7 +58,9 @@ class TestSshd(
   }
 
   /** This server's entry, filed under `[127.0.0.1]:port` unless given another name. */
-  fun knownHost(name: String = KnownHosts.name("127.0.0.1", port)) = KnownHost(listOf(name), hostKeyType, hostKeyBase64)
+  fun knownHost(
+    name: String = KnownHosts.name("127.0.0.1", port)
+  ) = KnownHost(listOf(name), hostKeyType, hostKeyBase64)
 
   fun log(): String = File(dir, "sshd.log").takeIf { it.exists() }?.readText().orEmpty()
 
@@ -73,7 +75,8 @@ class TestSshd(
     val user: String = System.getProperty("user.name") ?: error("no user.name")
 
     val available: Boolean
-      get() = File(SSHD).canExecute() && runCatching { run("ssh-keygen", "-?", check = false) }.isSuccess
+      get() = File(SSHD).canExecute() &&
+        runCatching { run("ssh-keygen", "-?", check = false) }.isSuccess
   }
 }
 
@@ -135,7 +138,8 @@ class TcpRelay(private val targetPort: Int) : Closeable {
 class TestHttpService(body: String) : Closeable {
   private val server = ServerSocket(0, 50, InetAddress.getLoopbackAddress())
   private val response = body.toByteArray().let { bytes ->
-    "HTTP/1.1 200 OK\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray() + bytes
+    "HTTP/1.1 200 OK\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray() +
+      bytes
   }
 
   val port: Int get() = server.localPort
@@ -164,7 +168,9 @@ class TestHttpService(body: String) : Closeable {
   override fun close() = server.close()
 }
 
-fun freeLoopbackPort(): Int = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }
+fun freeLoopbackPort(): Int = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use {
+  it.localPort
+}
 
 fun run(vararg command: String, check: Boolean = true): String {
   val process = ProcessBuilder(*command).redirectErrorStream(true).start()

@@ -25,7 +25,9 @@ class SshStoreTest {
       mask = 0x11
     }
 
-    private fun xor(bytes: ByteArray) = ByteArray(bytes.size) { (bytes[it].toInt() xor mask.toInt()).toByte() }
+    private fun xor(bytes: ByteArray) = ByteArray(bytes.size) {
+      (bytes[it].toInt() xor mask.toInt()).toByte()
+    }
   }
 
   private val sealer = XorSealer()

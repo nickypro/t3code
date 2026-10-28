@@ -9,12 +9,15 @@ import expo.modules.kotlin.records.Field
 import expo.modules.kotlin.records.Record
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import net.schmizz.sshj.common.SSHRuntimeException
 import net.schmizz.sshj.userauth.UserAuthException
 import java.io.File
+import java.io.IOException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -41,6 +44,9 @@ class T3SshModule : Module() {
     SshStore(File(context.noBackupFilesDir, "t3-ssh"), KeystoreSealer)
   }
 
+  // Expo only picks the zero-argument Coroutine overload when the empty arrow is written out,
+  // and ktlint's function-literal rule removes it.
+  @Suppress("ktlint:standard:function-literal")
   override fun definition() = ModuleDefinition {
     Name("T3Ssh")
 
@@ -49,38 +55,45 @@ class T3SshModule : Module() {
       sessions.clear()
     }
 
-    AsyncFunction("getPublicKey") Coroutine { -> io { store.publicKeyLine()?.let(::publicKeyInfo) } }
-
-    AsyncFunction("createKey") Coroutine { comment: String -> io { publicKeyInfo(store.createKey(comment)) } }
-
-    AsyncFunction("deleteKey") Coroutine { -> io { store.deleteKey() } }
-
-    AsyncFunction("readConfig") Coroutine { -> io { store.readConfig() } }
-
-    AsyncFunction("writeConfig") Coroutine { text: String -> io { store.writeConfig(text) } }
-
-    AsyncFunction("listKnownHosts") Coroutine { ->
-      io {
-        store.knownHosts().map { entry ->
-          mapOf(
-            "line" to entry.line,
-            "names" to entry.names,
-            "keyType" to entry.keyType,
-            "fingerprint" to sshFingerprint(Base64.getDecoder().decode(entry.keyBase64)),
-          )
-        }
-      }
+    AsyncFunction("getPublicKey") Coroutine { ->
+      io { store.publicKeyLine()?.let(::publicKeyInfo) }
     }
 
-    AsyncFunction("trustHostKey") Coroutine { line: String -> io { store.trust(line) } }
+    AsyncFunction("createKey") Coroutine { comment: String ->
+      io { publicKeyInfo(store.createKey(comment)) }
+    }
 
-    AsyncFunction("forgetHostKey") Coroutine { line: String -> io { store.forget(line) } }
+    AsyncFunction("deleteKey") Coroutine { ->
+      io { store.deleteKey() }
+    }
 
-    AsyncFunction("connect") Coroutine { hops: List<SshHopRecord> -> io { connect(hops) } }
+    AsyncFunction("readConfig") Coroutine { ->
+      io { store.readConfig() }
+    }
 
-    AsyncFunction("exec") Coroutine { sessionId: String, command: String, stdin: String, timeoutMs: Double ->
+    AsyncFunction("writeConfig") Coroutine { text: String ->
+      io { store.writeConfig(text) }
+    }
+
+    AsyncFunction("listKnownHosts") Coroutine { ->
+      io { store.knownHosts().map(::knownHostInfo) }
+    }
+
+    AsyncFunction("trustHostKey") Coroutine { line: String ->
+      io { store.trust(line) }
+    }
+
+    AsyncFunction("forgetHostKey") Coroutine { line: String ->
+      io { store.forget(line) }
+    }
+
+    AsyncFunction("connect") Coroutine { hops: List<SshHopRecord> ->
+      io { connect(hops) }
+    }
+
+    AsyncFunction("exec") Coroutine { id: String, command: String, stdin: String, ms: Double ->
       io {
-        val result = session(sessionId).exec(command, stdin, timeoutMs.toLong())
+        val result = session(id).exec(command, stdin, ms.toLong())
         mapOf("exitCode" to result.exitCode, "stdout" to result.stdout, "stderr" to result.stderr)
       }
     }
@@ -91,11 +104,14 @@ class T3SshModule : Module() {
 
     Function("isOpen") { sessionId: String -> sessions[sessionId]?.isOpen == true }
 
-    AsyncFunction("close") Coroutine { sessionId: String -> io { sessions.remove(sessionId)?.close() } }
+    AsyncFunction("close") Coroutine { sessionId: String ->
+      io { sessions.remove(sessionId)?.close() }
+    }
   }
 
   private fun connect(hops: List<SshHopRecord>): Map<String, Any?> {
-    val key = store.key() ?: throw CodedException("ERR_SSH_NO_KEY", "Create an SSH key first.", null)
+    val key =
+      store.key() ?: throw CodedException("ERR_SSH_NO_KEY", "Create an SSH key first.", null)
     sessions.entries.removeIf { (_, session) ->
       val dead = !session.isOpen
       if (dead) session.close()
@@ -131,6 +147,13 @@ class T3SshModule : Module() {
     sessions[id]?.takeIf { it.isOpen }
       ?: throw CodedException("ERR_SSH_SESSION_CLOSED", "The SSH connection closed.", null)
 
+  private fun knownHostInfo(entry: KnownHost): Map<String, Any> = mapOf(
+    "line" to entry.line,
+    "names" to entry.names,
+    "keyType" to entry.keyType,
+    "fingerprint" to sshFingerprint(Base64.getDecoder().decode(entry.keyBase64)),
+  )
+
   private fun publicKeyInfo(line: String): Map<String, String> {
     val blob = Base64.getDecoder().decode(line.split(Regex("\\s+"))[1])
     return mapOf("line" to line, "fingerprint" to sshFingerprint(blob))
@@ -139,18 +162,32 @@ class T3SshModule : Module() {
   private suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) {
     try {
       block()
-    } catch (error: CodedException) {
-      throw error
     } catch (error: UserAuthException) {
       throw CodedException("ERR_SSH_AUTH", "The server did not accept this device's key.", error)
-    } catch (error: Exception) {
-      val unreachable = error is UnknownHostException || error is ConnectException ||
-        error is NoRouteToHostException || error is SocketTimeoutException
-      throw CodedException(
-        if (unreachable) "ERR_SSH_UNREACHABLE" else "ERR_SSH",
-        error.message ?: error.javaClass.simpleName,
-        error,
-      )
+    } catch (error: UnknownHostException) {
+      throw unreachable(error)
+    } catch (error: ConnectException) {
+      throw unreachable(error)
+    } catch (error: NoRouteToHostException) {
+      throw unreachable(error)
+    } catch (error: SocketTimeoutException) {
+      throw unreachable(error)
+    } catch (error: IOException) {
+      throw failure(error)
+    } catch (error: GeneralSecurityException) {
+      throw failure(error)
+    } catch (error: SSHRuntimeException) {
+      throw failure(error)
+    } catch (error: IllegalArgumentException) {
+      throw failure(error)
+    } catch (error: IllegalStateException) {
+      throw failure(error)
     }
   }
+
+  private fun unreachable(error: Exception) =
+    CodedException("ERR_SSH_UNREACHABLE", error.message ?: error.javaClass.simpleName, error)
+
+  private fun failure(error: Exception) =
+    CodedException("ERR_SSH", error.message ?: error.javaClass.simpleName, error)
 }

@@ -41,22 +41,20 @@ class SshStore(private val dir: File, private val sealer: SeedSealer) {
   /** Adds an entry. A name that already has a different key must be forgotten first. */
   @Synchronized
   fun trust(line: String) {
-    val entry = KnownHosts.parseLine(line) ?: throw IllegalArgumentException("Not a known_hosts line.")
+    val entry = requireNotNull(KnownHosts.parseLine(line)) { "Not a known_hosts line." }
     val current = knownHosts()
-    if (current.any { it.keyType == entry.keyType && it.keyBase64 == entry.keyBase64 && it.names == entry.names }) {
-      return
-    }
+    if (entry in current) return
     val clash = current.firstOrNull { known -> entry.names.any(known::matches) }
-    if (clash != null) {
-      throw IllegalStateException("${clash.names.first()} already has a different trusted key. Remove it first.")
+    check(clash == null) {
+      "${clash?.names?.first()} already has a different trusted key. Remove it first."
     }
-    writeAtomically(knownHostsFile, (current + entry).joinToString("") { it.line + "\n" })
+    saveKnownHosts(current + entry)
   }
 
   @Synchronized
   fun forget(line: String) {
     val entry = KnownHosts.parseLine(line) ?: return
-    writeAtomically(knownHostsFile, knownHosts().filter { it != entry }.joinToString("") { it.line + "\n" })
+    saveKnownHosts(knownHosts() - entry)
   }
 
   @Synchronized
@@ -89,6 +87,9 @@ class SshStore(private val dir: File, private val sealer: SeedSealer) {
     publicKeyFile.delete()
     sealer.forget()
   }
+
+  private fun saveKnownHosts(entries: List<KnownHost>) =
+    writeAtomically(knownHostsFile, entries.joinToString("") { "${it.line}\n" })
 
   private fun File.readOrEmpty(): String = if (exists()) readText() else ""
 
@@ -132,7 +133,10 @@ object KeystoreSealer : SeedSealer {
     (keyStore().getKey(ALIAS, null) as? SecretKey)?.let { return it }
     val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
     generator.init(
-      KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+      KeyGenParameterSpec.Builder(
+        ALIAS,
+        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+      )
         .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
         .setKeySize(256)

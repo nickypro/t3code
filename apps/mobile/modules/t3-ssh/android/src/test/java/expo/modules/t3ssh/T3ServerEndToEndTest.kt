@@ -37,23 +37,34 @@ class T3ServerEndToEndTest {
   fun theDesktopScriptsStartAPairableServerThroughAJumpHost() {
     val scripts = System.getenv("T3_SSH_E2E_SCRIPTS")?.let(::File)
     val home = System.getenv("T3_SSH_E2E_HOME")
-    assumeTrue("set T3_SSH_E2E_SCRIPTS and T3_SSH_E2E_HOME", scripts != null && home != null && TestSshd.available)
+    assumeTrue(
+      "set T3_SSH_E2E_SCRIPTS and T3_SSH_E2E_HOME",
+      scripts != null && home != null && TestSshd.available
+    )
     scripts!!
     val stateKey = File(scripts, "state-key").readText().trim()
 
-    val target = sshd("environment=\"HOME=$home\" ${key.publicKeyLine("e2e")}", "PermitUserEnvironment yes")
+    val target =
+      sshd("environment=\"HOME=$home\" ${key.publicKeyLine("e2e")}", "PermitUserEnvironment yes")
     val jump = sshd(
       "restrict,port-forwarding,permitopen=\"127.0.0.1:${target.port}\",command=\"/bin/false\" " +
         key.publicKeyLine("e2e jump"),
     )
     val result = SshSession.connect(
-      listOf(SshHop("127.0.0.1", jump.port, TestSshd.user), SshHop("127.0.0.1", target.port, TestSshd.user)),
+      listOf(
+        SshHop("127.0.0.1", jump.port, TestSshd.user),
+        SshHop("127.0.0.1", target.port, TestSshd.user)
+      ),
       key.toKeyPair(),
       listOf(jump.knownHost(), target.knownHost()),
     )
     val session = (result as SshConnectResult.Connected).session.also(cleanup::add)
 
-    val launch = session.exec("sh -l -s -- $stateKey", File(scripts, "launch.sh").readText(), LAUNCH_TIMEOUT_MS)
+    val launch = session.exec(
+      "sh -l -s -- $stateKey",
+      File(scripts, "launch.sh").readText(),
+      LAUNCH_TIMEOUT_MS
+    )
     assertEquals(launch.stderr, 0, launch.exitCode)
     val remotePort = field(launch.stdout, "remotePort").toInt()
     try {
@@ -78,7 +89,11 @@ class T3ServerEndToEndTest {
       assertTrue(sessionState, sessionState.contains("\"authenticated\":true"))
 
       // A second launch finds the running server instead of starting another.
-      val again = session.exec("sh -l -s -- $stateKey", File(scripts, "launch.sh").readText(), LAUNCH_TIMEOUT_MS)
+      val again = session.exec(
+        "sh -l -s -- $stateKey",
+        File(scripts, "launch.sh").readText(),
+        LAUNCH_TIMEOUT_MS
+      )
       assertEquals(remotePort, field(again.stdout, "remotePort").toInt())
     } finally {
       session.exec("sh -s", File(scripts, "stop.sh").readText(), 60_000)
@@ -92,7 +107,12 @@ class T3ServerEndToEndTest {
     Regex("\"$name\"\\s*:\\s*\"?([^\",}]+)").find(json)?.groupValues?.get(1)
       ?: throw AssertionError("no $name in: $json")
 
-  private fun http(port: Int, path: String, form: Map<String, String>? = null, bearer: String? = null): String {
+  private fun http(
+    port: Int,
+    path: String,
+    form: Map<String, String>? = null,
+    bearer: String? = null
+  ): String {
     val connection = URL("http://127.0.0.1:$port$path").openConnection() as HttpURLConnection
     connection.connectTimeout = 10_000
     connection.readTimeout = 30_000
@@ -104,7 +124,13 @@ class T3ServerEndToEndTest {
       val body = form.entries.joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, "UTF-8")}" }
       connection.outputStream.use { it.write(body.toByteArray()) }
     }
-    val stream = if (connection.responseCode < 400) connection.inputStream else connection.errorStream
+    val stream = if (connection.responseCode <
+      400
+    ) {
+      connection.inputStream
+    } else {
+      connection.errorStream
+    }
     val text = stream.use { it.readBytes().decodeToString() }
     check(connection.responseCode < 400) { "$path answered ${connection.responseCode}: $text" }
     return text

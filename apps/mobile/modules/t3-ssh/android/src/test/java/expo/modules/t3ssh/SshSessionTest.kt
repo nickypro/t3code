@@ -41,7 +41,11 @@ class SshSessionTest {
     val server = sshd()
     val session = connected(listOf(hop(server)), listOf(server.knownHost()))
 
-    val result = session.exec("sh -s -- first", "echo \"out \$1\"; echo err >&2; cat; exit 3\nrest of stdin\n", 10_000)
+    val result = session.exec(
+      "sh -s -- first",
+      "echo \"out \$1\"; echo err >&2; cat; exit 3\nrest of stdin\n",
+      10_000
+    )
 
     assertEquals(3, result.exitCode)
     assertEquals("out first\n", result.stdout)
@@ -54,10 +58,20 @@ class SshSessionTest {
 
     val rejection = rejected(listOf(hop(server)), emptyList())
 
-    val keygen = run("ssh-keygen", "-l", "-E", "sha256", "-f", server.hostKeyPublicFile.path).split(" ")[1]
+    val keygen = run(
+      "ssh-keygen",
+      "-l",
+      "-E",
+      "sha256",
+      "-f",
+      server.hostKeyPublicFile.path
+    ).split(" ")[1]
     assertEquals(keygen, rejection.fingerprint)
     assertFalse(rejection.changed)
-    assertEquals("[127.0.0.1]:${server.port} ${server.hostKeyType} ${server.hostKeyBase64}", rejection.knownHostsLine)
+    assertEquals(
+      "[127.0.0.1]:${server.port} ${server.hostKeyType} ${server.hostKeyBase64}",
+      rejection.knownHostsLine
+    )
   }
 
   @Test
@@ -94,7 +108,11 @@ class SshSessionTest {
     assertNotEquals(0, onJump.exec("echo shell", "", 10_000).exitCode)
     val elsewhere = freeLoopbackPort()
     assertThrows(IOException::class.java) {
-      SshSession.connect(listOf(hop(jump), SshHop("127.0.0.1", elsewhere, TestSshd.user)), key.toKeyPair(), known)
+      SshSession.connect(
+        listOf(hop(jump), SshHop("127.0.0.1", elsewhere, TestSshd.user)),
+        key.toKeyPair(),
+        known
+      )
     }
   }
 
@@ -155,11 +173,25 @@ class SshSessionTest {
 
   @Test
   fun weakAlgorithmsAreNotOffered() {
-    for (weak in listOf("hmac-sha1", "diffie-hellman-group14-sha1", "aes128-cbc", "ssh-rsa", "ssh-dss", "3des-cbc")) {
+    for (weak in listOf(
+      "hmac-sha1",
+      "diffie-hellman-group14-sha1",
+      "aes128-cbc",
+      "ssh-rsa",
+      "ssh-dss",
+      "3des-cbc"
+    )) {
       assertFalse(weak, SshSession.isAllowedAlgorithm(weak))
     }
-    for (modern in listOf("curve25519-sha256", "chacha20-poly1305@openssh.com", "aes256-gcm@openssh.com",
-      "hmac-sha2-256-etm@openssh.com", "ssh-ed25519", "rsa-sha2-512", "ecdh-sha2-nistp256")) {
+    for (modern in listOf(
+      "curve25519-sha256",
+      "chacha20-poly1305@openssh.com",
+      "aes256-gcm@openssh.com",
+      "hmac-sha2-256-etm@openssh.com",
+      "ssh-ed25519",
+      "rsa-sha2-512",
+      "ecdh-sha2-nistp256"
+    )) {
       assertTrue(modern, SshSession.isAllowedAlgorithm(modern))
     }
   }
@@ -167,12 +199,24 @@ class SshSessionTest {
   private fun sshd(authorized: String = key.publicKeyLine("test"), extra: String = "") =
     TestSshd(tmp.newFolder(), authorized, extra).also(cleanup::add)
 
-  private fun tunnelOnly(targetPort: Int) =
-    "restrict,port-forwarding,permitopen=\"127.0.0.1:$targetPort\",command=\"/bin/false\" ${key.publicKeyLine("jump")}"
+  private fun tunnelOnly(targetPort: Int): String {
+    val options = "restrict,port-forwarding," +
+      "permitopen=\"127.0.0.1:$targetPort\",command=\"/bin/false\""
+    return "$options ${key.publicKeyLine("jump")}"
+  }
 
-  private fun hop(server: TestSshd, alias: String? = null) = SshHop("127.0.0.1", server.port, TestSshd.user, alias)
+  private fun hop(server: TestSshd, alias: String? = null) = SshHop(
+    "127.0.0.1",
+    server.port,
+    TestSshd.user,
+    alias
+  )
 
-  private fun connected(hops: List<SshHop>, known: List<KnownHost>, options: SshOptions = SshOptions()): SshSession {
+  private fun connected(
+    hops: List<SshHop>,
+    known: List<KnownHost>,
+    options: SshOptions = SshOptions()
+  ): SshSession {
     val result = SshSession.connect(hops, key.toKeyPair(), known, options)
     check(result is SshConnectResult.Connected) { "expected a connection, got $result" }
     cleanup += result.session

@@ -28,7 +28,7 @@ data class SshHop(
   val host: String,
   val port: Int,
   val user: String,
-  val hostKeyAlias: String? = null,
+  val hostKeyAlias: String? = null
 ) {
   /** The known_hosts name this hop's key is checked under. */
   val knownHostsName: String
@@ -39,7 +39,7 @@ data class SshOptions(
   val connectTimeoutMs: Int = 15_000,
   // Matches the desktop's ServerAliveInterval=15 / ServerAliveCountMax=3.
   val keepAliveSeconds: Int = 15,
-  val keepAliveMaxCount: Int = 3,
+  val keepAliveMaxCount: Int = 3
 )
 
 data class ExecResult(val exitCode: Int?, val stdout: String, val stderr: String)
@@ -51,7 +51,7 @@ data class HostKeyRejection(
   val keyBase64: String,
   val fingerprint: String,
   /** known_hosts already holds a different key under this name. */
-  val changed: Boolean,
+  val changed: Boolean
 ) {
   val knownHostsLine: String get() = "${hop.knownHostsName} $keyType $keyBase64"
 }
@@ -149,39 +149,51 @@ class SshSession private constructor(private val clients: List<SSHClient>) : Clo
       hops: List<SshHop>,
       key: KeyPair,
       knownHosts: List<KnownHost>,
-      options: SshOptions = SshOptions(),
+      options: SshOptions = SshOptions()
     ): SshConnectResult {
       require(hops.isNotEmpty()) { "An SSH connection needs at least one host." }
       SshCrypto.ensureBouncyCastle()
       val clients = ArrayList<SSHClient>(hops.size)
+      var handedOver = false
       try {
-        for ((index, hop) in hops.withIndex()) {
+        for (hop in hops) {
           val verifier = PinnedHostKeyVerifier(hop.knownHostsName, knownHosts)
           val client = newClient(options, verifier)
-          try {
-            if (index == 0) {
-              client.connect(hop.host, hop.port)
-            } else {
-              client.connectVia(clients.last().newDirectConnection(hop.host, hop.port), hop.host, hop.port)
-            }
-          } catch (error: IOException) {
-            closeQuietly(client)
-            val rejection = verifier.rejection(hop) ?: throw error
-            closeAll(clients)
-            return SshConnectResult.Rejected(rejection)
-          }
+          val rejection = connectHop(client, hop, clients.lastOrNull(), verifier)
+          if (rejection != null) return SshConnectResult.Rejected(rejection)
           clients += client
           client.authPublickey(hop.user, KeyPairWrapper(key))
         }
-      } catch (error: Throwable) {
-        closeAll(clients)
-        throw error
+        val session = SshSession(clients)
+        for (client in clients) {
+          client.transport.disconnectListener =
+            DisconnectListener { _, _ -> session.onTransportDeath() }
+        }
+        handedOver = true
+        return SshConnectResult.Connected(session)
+      } finally {
+        if (!handedOver) closeAll(clients)
       }
-      val session = SshSession(clients)
-      for (client in clients) {
-        client.transport.disconnectListener = DisconnectListener { _, _ -> session.onTransportDeath() }
+    }
+
+    /** Opens the transport to `hop`, through `via` when there is one; null once verified. */
+    private fun connectHop(
+      client: SSHClient,
+      hop: SshHop,
+      via: SSHClient?,
+      verifier: PinnedHostKeyVerifier
+    ): HostKeyRejection? {
+      try {
+        if (via == null) {
+          client.connect(hop.host, hop.port)
+        } else {
+          client.connectVia(via.newDirectConnection(hop.host, hop.port), hop.host, hop.port)
+        }
+        return null
+      } catch (error: IOException) {
+        closeQuietly(client)
+        return verifier.rejection(hop) ?: throw error
       }
-      return SshConnectResult.Connected(session)
     }
 
     /** Drops SHA-1, MD5, CBC, 3DES/RC4/Blowfish and DSA, which no OpenSSH since 7.4 needs. */
@@ -228,7 +240,7 @@ class SshSession private constructor(private val clients: List<SSHClient>) : Clo
 /** Accepts exactly the keys known_hosts lists under one name and remembers what it saw. */
 private class PinnedHostKeyVerifier(
   private val name: String,
-  knownHosts: List<KnownHost>,
+  knownHosts: List<KnownHost>
 ) : HostKeyVerifier {
   private val entries = knownHosts.filter { it.matches(name) }
 
@@ -246,12 +258,13 @@ private class PinnedHostKeyVerifier(
 
   // Lets sshj negotiate the key type already on file, as OpenSSH does.
   override fun findExistingAlgorithms(hostname: String, port: Int): List<String> =
-    entries.flatMap { if (it.keyType == "ssh-rsa") listOf("rsa-sha2-512", "rsa-sha2-256") else listOf(it.keyType) }
-      .distinct()
+    entries.flatMap { algorithmsFor(it.keyType) }.distinct()
+
+  private fun algorithmsFor(keyType: String) =
+    if (keyType == "ssh-rsa") listOf("rsa-sha2-512", "rsa-sha2-256") else listOf(keyType)
 
   fun rejection(hop: SshHop): HostKeyRejection? {
-    val key = presented ?: return null
-    if (accepted) return null
+    val key = presented?.takeUnless { accepted } ?: return null
     val blob = blobOf(key)
     return HostKeyRejection(
       hop = hop,

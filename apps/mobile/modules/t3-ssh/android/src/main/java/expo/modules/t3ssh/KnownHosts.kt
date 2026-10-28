@@ -21,22 +21,18 @@ object KnownHosts {
   fun parse(text: String): List<KnownHost> = text.lineSequence().mapNotNull(::parseLine).toList()
 
   fun parseLine(raw: String): KnownHost? {
-    val line = raw.trim()
-    if (line.isEmpty() || line.startsWith("#") || line.startsWith("@") || line.startsWith("|")) {
-      return null
-    }
-    val fields = line.split(Regex("\\s+"))
-    if (fields.size < 3) return null
-    val names = fields[0].split(",").filter { it.isNotEmpty() }
-    if (names.isEmpty() || names.any { it.startsWith("|") || it.contains('*') || it.contains('?') }) {
-      return null
-    }
-    val blob = try {
-      Base64.getDecoder().decode(fields[2])
-    } catch (_: IllegalArgumentException) {
-      return null
-    }
-    if (blob.isEmpty()) return null
-    return KnownHost(names, fields[1], fields[2])
+    val fields = raw.trim().split(WHITESPACE)
+    if (fields.size < 3 || !isPlainNameList(fields[0])) return null
+    val blob = runCatching { Base64.getDecoder().decode(fields[2]) }.getOrNull()
+    val entry = KnownHost(fields[0].split(","), fields[1], fields[2])
+    return entry.takeIf { blob?.isNotEmpty() == true }
   }
+
+  // Comments, `@` markers, hashed `|1|` names and patterns could match a host other than the
+  // one the user trusted, so only plain names count.
+  private fun isPlainNameList(field: String): Boolean = field.split(",").all { name ->
+    name.isNotEmpty() && name[0] !in "#@|" && name.none { it in "*?!" }
+  }
+
+  private val WHITESPACE = Regex("\\s+")
 }

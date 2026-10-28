@@ -23,7 +23,10 @@ class KnownHostsTest {
       """.trimIndent(),
     )
 
-    assertEquals(listOf(KnownHost(listOf("example.com", "[10.0.0.1]:2222"), "ssh-ed25519", key)), entries)
+    assertEquals(
+      listOf(KnownHost(listOf("example.com", "[10.0.0.1]:2222"), "ssh-ed25519", key)),
+      entries
+    )
     assertEquals(true, entries.single().matches("[10.0.0.1]:2222"))
   }
 

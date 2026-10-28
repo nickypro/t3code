@@ -78,7 +78,10 @@ class Ed25519Key(seed: ByteArray) {
 
 /** OpenSSH's `SHA256:` fingerprint of a public key blob. */
 fun sshFingerprint(blob: ByteArray): String =
-  "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(MessageDigest.getInstance("SHA-256").digest(blob))
+  "SHA256:" +
+    Base64.getEncoder().withoutPadding().encodeToString(
+      MessageDigest.getInstance("SHA-256").digest(blob)
+    )
 
 private fun sshStrings(vararg values: ByteArray): ByteArray {
   val bytes = ByteArrayOutputStream()
