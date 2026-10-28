@@ -89,7 +89,10 @@ function setup(options: { readonly connect?: () => SshConnectResult } = {}) {
     // Only the reuse probe goes through the client; the auth helpers are mocked above.
     httpClient: HttpClient.make((request) =>
       Effect.sync(() =>
-        HttpClientResponse.fromWeb(request, new Response("", { status: forward.answers ? 200 : 503 })),
+        HttpClientResponse.fromWeb(
+          request,
+          new Response("", { status: forward.answers ? 200 : 503 }),
+        ),
       ),
     ),
     clientMetadata: { label: "Phone", os: "Android" },
