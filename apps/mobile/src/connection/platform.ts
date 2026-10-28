@@ -16,7 +16,9 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import { HttpClient } from "effect/http";
 import Constants from "expo-constants";
+import * as ExpoCrypto from "expo-crypto";
 import * as Network from "expo-network";
 import { AppState } from "react-native";
 
@@ -29,6 +31,8 @@ import { clearComposerDraftsEnvironment } from "../state/use-composer-drafts";
 import { clearThreadComposerErrorsForEnvironment } from "../state/thread-composer-error";
 import { mobileApplicationActiveWakeup } from "./app-state-wakeups";
 import * as ConnectionStorage from "./storage";
+import { makeSshGateway } from "./ssh/gateway";
+import { sshNative } from "./ssh/native";
 
 function networkStatus(state: Network.NetworkState): "unknown" | "offline" | "online" {
   if (state.isConnected === false) {
@@ -148,9 +152,31 @@ const layerWakeups = Wakeups.layer({
   ),
 });
 
+const sshUnsupported = new ConnectionBlockedError({
+  reason: "unsupported",
+  detail: "SSH environments are only available in the desktop and Android apps.",
+});
+
+const unsupportedSshGateway = ClientCapabilities.SshEnvironmentGateway.of({
+  provision: () => Effect.fail(sshUnsupported),
+  prepare: () => Effect.fail(sshUnsupported),
+  disconnect: () => Effect.void,
+});
+
 const layerCapabilities = Layer.effectContext(
   Effect.gen(function* () {
     const storage = yield* MobileStorage.MobileStorage;
+    const clientMetadata = authClientMetadata(Constants.expoConfig?.version);
+    const sshGateway =
+      sshNative === null
+        ? unsupportedSshGateway
+        : yield* makeSshGateway({
+            native: sshNative,
+            httpClient: yield* HttpClient.HttpClient,
+            clientMetadata,
+            sha256Hex: (text) =>
+              ExpoCrypto.digestStringAsync(ExpoCrypto.CryptoDigestAlgorithm.SHA256, text),
+          });
     return Context.make(
       ClientCapabilities.CloudSession,
       ClientCapabilities.CloudSession.of({
@@ -212,29 +238,10 @@ const layerCapabilities = Layer.effectContext(
       Context.add(
         ClientCapabilities.ClientPresentation,
         ClientCapabilities.ClientPresentation.of({
-          metadata: authClientMetadata(Constants.expoConfig?.version),
+          metadata: clientMetadata,
         }),
       ),
-      Context.add(
-        ClientCapabilities.SshEnvironmentGateway,
-        ClientCapabilities.SshEnvironmentGateway.of({
-          provision: () =>
-            Effect.fail(
-              new ConnectionBlockedError({
-                reason: "unsupported",
-                detail: "SSH environments are only available in the desktop app.",
-              }),
-            ),
-          prepare: () =>
-            Effect.fail(
-              new ConnectionBlockedError({
-                reason: "unsupported",
-                detail: "SSH environments are only available in the desktop app.",
-              }),
-            ),
-          disconnect: () => Effect.void,
-        }),
-      ),
+      Context.add(ClientCapabilities.SshEnvironmentGateway, sshGateway),
     );
   }),
 );

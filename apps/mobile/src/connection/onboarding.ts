@@ -1,9 +1,9 @@
-import { ConnectionOnboarding } from "@t3tools/client-runtime/connection";
+import { ConnectionOnboarding, sshTargetKey } from "@t3tools/client-runtime/connection";
 import {
   createAtomCommandScheduler,
   createRuntimeCommand,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import { connectionAtomRuntime } from "./runtime";
@@ -42,5 +42,18 @@ export const updateBearerConnection = createRuntimeCommand(connectionAtomRuntime
   }) =>
     ConnectionOnboarding.ConnectionOnboarding.pipe(
       Effect.flatMap((onboarding) => onboarding.updateBearer(input)),
+    ),
+});
+
+export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime, {
+  label: "mobile:connection:connect-ssh",
+  scheduler: onboardingScheduler,
+  concurrency: {
+    mode: "singleFlight",
+    key: (input: { readonly target: DesktopSshEnvironmentTarget }) => sshTargetKey(input.target),
+  },
+  execute: (input: { readonly target: DesktopSshEnvironmentTarget }) =>
+    ConnectionOnboarding.ConnectionOnboarding.pipe(
+      Effect.flatMap((onboarding) => onboarding.registerSsh({ target: input.target })),
     ),
 });

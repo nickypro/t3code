@@ -19,5 +19,8 @@ const runner = { archiveVersion };
 NodeFS.mkdirSync(outDir, { recursive: true });
 NodeFS.writeFileSync(NodePath.join(outDir, "state-key"), stateKey);
 NodeFS.writeFileSync(NodePath.join(outDir, "launch.sh"), buildRemoteLaunchScript(runner));
-NodeFS.writeFileSync(NodePath.join(outDir, "pairing.sh"), buildRemotePairingScript(stateKey, runner));
+NodeFS.writeFileSync(
+  NodePath.join(outDir, "pairing.sh"),
+  buildRemotePairingScript(stateKey, runner),
+);
 NodeFS.writeFileSync(NodePath.join(outDir, "stop.sh"), buildRemoteStopScript(stateKey));
