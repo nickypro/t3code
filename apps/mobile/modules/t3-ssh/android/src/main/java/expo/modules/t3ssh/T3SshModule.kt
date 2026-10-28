@@ -96,7 +96,11 @@ class T3SshModule : Module() {
 
   private fun connect(hops: List<SshHopRecord>): Map<String, Any?> {
     val key = store.key() ?: throw CodedException("ERR_SSH_NO_KEY", "Create an SSH key first.", null)
-    sessions.entries.removeIf { !it.value.isOpen }
+    sessions.entries.removeIf { (_, session) ->
+      val dead = !session.isOpen
+      if (dead) session.close()
+      dead
+    }
     val result = SshSession.connect(
       hops.map { SshHop(it.host, it.port, it.user, it.hostKeyAlias) },
       key.toKeyPair(),

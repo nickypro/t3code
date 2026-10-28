@@ -17,6 +17,7 @@ import {
   type DesktopSshEnvironmentTarget,
   type EnvironmentId,
 } from "@t3tools/contracts";
+import { waitForHttpReady } from "@t3tools/shared/httpReadiness";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
 import {
   buildRemoteLaunchScript,
@@ -55,6 +56,20 @@ interface Tunnel {
 }
 
 const runner = { archiveVersion: REMOTE_T3_VERSION };
+
+// A forward can outlive its server, or a frozen app's connection, and still look open. As on
+// the desktop, a reused one must answer within this before it is trusted.
+const REUSE_PROBE_TIMEOUT_MS = 2_000;
+
+const answers = (httpBaseUrl: string) =>
+  waitForHttpReady({
+    baseUrl: httpBaseUrl,
+    timeoutMs: REUSE_PROBE_TIMEOUT_MS,
+    makeError: () => "unanswered" as const,
+  }).pipe(
+    Effect.as(true),
+    Effect.catch(() => Effect.succeed(false)),
+  );
 
 /**
  * The desktop's SSH environment flow, over the app's own SSH connection: run the launch
@@ -142,7 +157,10 @@ export const makeSshGateway = Effect.fn("mobile.ssh.makeGateway")(function* (
       key,
       Effect.gen(function* () {
         let tunnel = tunnels.get(key);
-        if (tunnel !== undefined && !native.isOpen(tunnel.sessionId)) {
+        if (
+          tunnel !== undefined &&
+          !(native.isOpen(tunnel.sessionId) && (yield* answers(tunnel.httpBaseUrl)))
+        ) {
           yield* dropTunnel(key);
           tunnel = undefined;
         }

@@ -6,7 +6,10 @@ import {
 } from "@t3tools/contracts";
 import { targetConnectionKey } from "@t3tools/ssh/remoteScripts";
 import * as Effect from "effect/Effect";
-import { HttpClient } from "effect/http";
+import * as Fiber from "effect/Fiber";
+import * as HttpClient from "effect/http/HttpClient";
+import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "node:crypto";
 import { vi } from "vite-plus/test";
 
@@ -59,6 +62,7 @@ function setup(options: { readonly connect?: () => SshConnectResult } = {}) {
       Effect.succeed({ authenticated: true, scopes: [...AuthStandardClientScopes] }),
     );
   const open = new Set<string>();
+  const forward = { answers: true };
   let sessions = 0;
   const native = {
     readConfig: vi.fn(async () => CONFIG),
@@ -82,11 +86,16 @@ function setup(options: { readonly connect?: () => SshConnectResult } = {}) {
   };
   const gateway = makeSshGateway({
     native: native as typeof native & SshNative,
-    httpClient: {} as HttpClient.HttpClient,
+    // Only the reuse probe goes through the client; the auth helpers are mocked above.
+    httpClient: HttpClient.make((request) =>
+      Effect.sync(() =>
+        HttpClientResponse.fromWeb(request, new Response("", { status: forward.answers ? 200 : 503 })),
+      ),
+    ),
     clientMetadata: { label: "Phone", os: "Android" },
     sha256Hex,
   });
-  return { native, open, gateway };
+  return { native, open, forward, gateway };
 }
 
 describe("mobile SSH gateway", () => {
@@ -236,6 +245,30 @@ describe("mobile SSH gateway", () => {
 
       expect(native.connect).toHaveBeenCalledTimes(2);
       expect(native.forward).toHaveBeenLastCalledWith("session-2", 3777);
+    }),
+  );
+
+  it.effect("replaces a tunnel whose forward stopped answering", () =>
+    Effect.gen(function* () {
+      const { native, forward, gateway } = setup();
+      const ssh = yield* gateway;
+      yield* ssh.provision(TARGET);
+      forward.answers = false;
+
+      const preparing = yield* Effect.forkChild(
+        ssh.prepare({
+          connectionId: "c",
+          expectedEnvironmentId: ENVIRONMENT,
+          target: TARGET,
+          bearerToken: "t",
+        }),
+      );
+      // The reuse probe gives up after its budget, then the gateway reconnects.
+      yield* TestClock.adjust("3 seconds");
+      yield* Fiber.join(preparing);
+
+      expect(native.close).toHaveBeenCalledWith("session-1");
+      expect(native.connect).toHaveBeenCalledTimes(2);
     }),
   );
 
