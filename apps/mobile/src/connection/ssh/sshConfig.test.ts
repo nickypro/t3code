@@ -3,28 +3,28 @@ import { describe, expect, it } from "vite-plus/test";
 import { parseSshConfig, resolveSshHost } from "./sshConfig";
 
 const BOX = `
-# The research box: the host's sshd, then the container's on its loopback.
-Host slop
-  HostName slop.example
-  User nicky
+# A container reached through its host: the host's sshd, then the container's on its loopback.
+Host gateway
+  HostName gateway.example
+  User me
 
-Host slop-box
+Host devbox
   HostName 127.0.0.1
   Port 2222
   User dev
-  HostKeyAlias slop-box
-  ProxyJump slop
+  HostKeyAlias devbox
+  ProxyJump gateway
   ForwardAgent no
 `;
 
 describe("parseSshConfig / resolveSshHost", () => {
   it("resolves a ProxyJump chain, jump host first", () => {
-    expect(resolveSshHost(parseSshConfig(BOX), "slop-box")).toEqual({
+    expect(resolveSshHost(parseSshConfig(BOX), "devbox")).toEqual({
       hops: [
-        { host: "slop.example", port: 22, user: "nicky", hostKeyAlias: null },
-        { host: "127.0.0.1", port: 2222, user: "dev", hostKeyAlias: "slop-box" },
+        { host: "gateway.example", port: 22, user: "me", hostKeyAlias: null },
+        { host: "127.0.0.1", port: 2222, user: "dev", hostKeyAlias: "devbox" },
       ],
-      target: { alias: "slop-box", hostname: "127.0.0.1", username: "dev", port: 2222 },
+      target: { alias: "devbox", hostname: "127.0.0.1", username: "dev", port: 2222 },
     });
   });
 
