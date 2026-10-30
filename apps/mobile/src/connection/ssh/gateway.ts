@@ -37,7 +37,7 @@ import { parseSshConfig, resolveSshHost } from "./sshConfig";
  * The t3 release a host is given when it has no server running yet. The desktop passes its
  * own version here; keep this in step with the server version this build is paired with.
  */
-export const REMOTE_T3_VERSION = "0.1.2";
+export const REMOTE_T3_VERSION = "0.1.5";
 
 export interface SshGatewayDependencies {
   readonly native: SshNative;
