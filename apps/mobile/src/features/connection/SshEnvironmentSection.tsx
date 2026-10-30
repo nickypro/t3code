@@ -56,6 +56,14 @@ function SshHosts(props: { readonly native: SshNative; readonly onConnected: () 
 
   const openSettings = () => navigation.navigate("SettingsSsh");
 
+  /** Resolves to null once connected, "cancelled" if a host key was declined, or why it failed. */
+  const connectHost = async (alias: string) => {
+    const resolved = resolveSshHost(config, alias);
+    if (!(await reviewHostKeys(native, resolved.hops, confirmHostKey))) return "cancelled";
+    const result = await connectSsh({ target: resolved.target });
+    return AsyncResult.isSuccess(result) ? null : sshFailureMessage(Cause.squash(result.cause));
+  };
+
   const connect = async (alias: string) => {
     if (!hasKey) {
       Dialog.alert("Create an SSH key first", "Then add its public key to the host.", [
@@ -65,26 +73,16 @@ function SshHosts(props: { readonly native: SshNative; readonly onConnected: () 
       return;
     }
     setConnecting(alias);
-    try {
-      const resolved = resolveSshHost(config, alias);
-      if (!(await reviewHostKeys(native, resolved.hops, confirmHostKey))) return;
-      const result = await connectSsh({ target: resolved.target });
-      void Haptics.notificationAsync(
-        AsyncResult.isSuccess(result)
-          ? Haptics.NotificationFeedbackType.Success
-          : Haptics.NotificationFeedbackType.Error,
-      );
-      if (AsyncResult.isSuccess(result)) {
-        onConnected();
-      } else {
-        Dialog.alert("Could not connect", sshFailureMessage(Cause.squash(result.cause)));
-      }
-    } catch (error) {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Dialog.alert("Could not connect", sshFailureMessage(error));
-    } finally {
-      setConnecting(null);
-    }
+    const failure = await connectHost(alias).catch((error: unknown) => sshFailureMessage(error));
+    setConnecting(null);
+    if (failure === "cancelled") return;
+    void Haptics.notificationAsync(
+      failure === null
+        ? Haptics.NotificationFeedbackType.Success
+        : Haptics.NotificationFeedbackType.Error,
+    );
+    if (failure === null) onConnected();
+    else Dialog.alert("Could not connect", failure);
   };
 
   return (

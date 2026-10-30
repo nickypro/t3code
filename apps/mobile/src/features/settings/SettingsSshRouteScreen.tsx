@@ -1,6 +1,6 @@
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Share, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -52,17 +52,13 @@ function SshSettings({ native }: { readonly native: SshNative }) {
   const [busy, setBusy] = useState<"key" | "config" | null>(null);
   const problems = useMemo(() => parseSshConfig(config).problems, [config]);
 
-  const run = useCallback(async (kind: "key" | "config" | null, action: () => Promise<void>) => {
+  const run = async (kind: "key" | "config" | null, action: () => Promise<void>) => {
     setBusy(kind);
-    try {
-      await action();
-    } catch (error) {
-      Dialog.alert("SSH", sshFailureMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  }, []);
+    await action().catch((error: unknown) => Dialog.alert("SSH", sshFailureMessage(error)));
+    setBusy(null);
+  };
 
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- loads the key, config and host keys the native SSH module stores
   useEffect(() => {
     let live = true;
     Promise.all([native.getPublicKey(), native.readConfig(), native.listKnownHosts()]).then(

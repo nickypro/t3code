@@ -63,6 +63,7 @@ vi.mock("../settings/settings-navigation", () => ({
 vi.mock("../workspace/workspace-selection-store", () => ({ workspaceHasColumns: () => false }));
 vi.mock("../cloud/publicConfig", () => ({ hasCloudPublicConfig: () => false }));
 vi.mock("./CloudEnvironmentRows", () => ({ CloudEnvironmentRows: () => null }));
+vi.mock("./SshEnvironmentSection", () => ({ SshEnvironmentSection: () => null }));
 vi.mock("./environmentSections", () => ({
   splitEnvironmentSections: () => ({ connectedCloudEnvironments: [] }),
 }));
